@@ -16,6 +16,8 @@ Usage :
   python scoring_model.py --recommend 100000             # top 20 sur 100 000 tirages aléatoires
   python scoring_model.py --score 5 14 23 42 49 2 8      # score une sélection
   python scoring_model.py --ablation                     # étude d'ablation feature par feature + groupes
+  python scoring_model.py --select-features              # exclut cooc_pairs + deficit (surapprentissage)
+  python scoring_model.py --compare-features             # compare 52 features vs 44 sélectionnées
   python scoring_model.py --n-neg 20                     # ratio négatifs/positifs (défaut 20)
   python scoring_model.py --no-plots                     # sans graphiques
 """
@@ -115,6 +117,17 @@ FEATURE_GROUPS: dict[str, list[str]] = {
     "cooc_stars":   ["star_cooc"],
     "numerology":   ["n_prime_balls", "n_square_balls"],
 }
+
+# Sélection de features basée sur l'ablation :
+# cooc_pairs (surapprentissage, -0.250) + deficit (neutre, -0.250) sont exclus.
+# Les groupes conservés battent l'aléatoire en isolation (Seul T30 ≥ 3.000).
+_ABLATION_EXCLUDE = {"cooc_pairs", "deficit"}
+SELECTED_INDICES: list[int] = [
+    i for i, name in enumerate(FEATURE_NAMES)
+    if all(name not in FEATURE_GROUPS.get(grp, []) for grp in _ABLATION_EXCLUDE)
+]
+# 52 - 4 (cooc_pairs) - 4 (deficit) = 44 features
+assert len(SELECTED_INDICES) == 44
 
 
 # ---------------------------------------------------------------------------
@@ -417,13 +430,19 @@ class ScoringModel:
     Utilisé pour scorer et expliquer n'importe quelle sélection.
     """
 
-    def __init__(self, n_neg_ratio: int = 20, seed: int = 42, fast: bool = False) -> None:
-        self.n_neg_ratio = n_neg_ratio
-        self.seed        = seed
+    def __init__(
+        self,
+        n_neg_ratio:  int = 20,
+        seed:         int = 42,
+        fast:         bool = False,
+        feature_mask: list[int] | None = None,
+    ) -> None:
+        self.n_neg_ratio  = n_neg_ratio
+        self.seed         = seed
+        self.feature_mask = feature_mask   # None = toutes les features
         self.stats:  DrawStats | None = None
         self.scaler  = StandardScaler()
         if fast:
-            # Version allégée pour le walk-forward (un modèle par tirage)
             self.clf = GradientBoostingClassifier(
                 n_estimators=200,
                 max_depth=3,
@@ -433,7 +452,6 @@ class ScoringModel:
                 random_state=seed,
             )
         else:
-            # Version complète pour le scoring final
             self.clf = GradientBoostingClassifier(
                 n_estimators=600,
                 max_depth=4,
@@ -445,6 +463,14 @@ class ScoringModel:
         self.lr      = LogisticRegression(max_iter=1000, random_state=seed)
         self.importances: np.ndarray | None = None
 
+    def _mask(self, X: np.ndarray) -> np.ndarray:
+        return X[:, self.feature_mask] if self.feature_mask is not None else X
+
+    def _active_names(self) -> list[str]:
+        if self.feature_mask is None:
+            return FEATURE_NAMES
+        return [FEATURE_NAMES[i] for i in self.feature_mask]
+
     # ── Entraînement ─────────────────────────────────────────────────────
 
     def fit(self, train_df: pd.DataFrame) -> "ScoringModel":
@@ -453,37 +479,34 @@ class ScoringModel:
 
         print("  Construction du jeu d'entraînement…")
         X, y = build_dataset(train_df, self.stats, self.n_neg_ratio, self.seed)
-        print(f"    {int(y.sum()):,} positifs · {int((y==0).sum()):,} négatifs · {X.shape[1]} features")
+        Xm   = self._mask(X)
+        print(f"    {int(y.sum()):,} positifs · {int((y==0).sum()):,} négatifs · {Xm.shape[1]} features")
 
-        Xs = self.scaler.fit_transform(X)
+        Xs = self.scaler.fit_transform(Xm)
         self.clf.fit(Xs, y)
         self.lr.fit(Xs, y)
         self.importances = self.clf.feature_importances_
 
-        # Distribution de référence des vrais tirages (pour les Z-scores)
-        self.stats.ref_mean = X[y == 1].mean(axis=0)
-        self.stats.ref_std  = X[y == 1].std(axis=0) + 1e-9
+        # Distribution de référence (sur les vrais tirages, dans l'espace masqué)
+        self.stats.ref_mean = Xm[y == 1].mean(axis=0)
+        self.stats.ref_std  = Xm[y == 1].std(axis=0) + 1e-9
         return self
 
     # ── Score d'une combinaison ───────────────────────────────────────────
 
-    def score(
-        self,
-        balls: list[int],
-        stars: list[int],
-    ) -> float:
+    def score(self, balls: list[int], stars: list[int]) -> float:
         """Score 0–1 (GBT). Plus élevé = plus similaire aux vrais tirages."""
         f  = extract_features(sorted(balls), sorted(stars), self.stats)
-        fs = self.scaler.transform(f.reshape(1, -1))
+        fs = self.scaler.transform(self._mask(f.reshape(1, -1)))
         return float(self.clf.predict_proba(fs)[0, 1])
 
     def score_batch(self, combinations: list[tuple]) -> np.ndarray:
         """Score plusieurs (balls, stars) d'un coup (plus rapide)."""
-        X = np.vstack([
+        X  = np.vstack([
             extract_features(sorted(b), sorted(s), self.stats)
             for b, s in combinations
         ])
-        Xs = self.scaler.transform(X)
+        Xs = self.scaler.transform(self._mask(X))
         return self.clf.predict_proba(Xs)[:, 1]
 
     # ── Explication ───────────────────────────────────────────────────────
@@ -494,12 +517,13 @@ class ScoringModel:
         stars: list[int],
     ) -> dict:
         """Retourne le score et le détail de chaque feature (valeur, z-score, importance)."""
-        balls = sorted(balls)
-        stars = sorted(stars)
-        f     = extract_features(balls, stars, self.stats)
-        z     = (f - self.stats.ref_mean) / self.stats.ref_std
-        score = float(self.clf.predict_proba(
-            self.scaler.transform(f.reshape(1, -1))
+        balls  = sorted(balls)
+        stars  = sorted(stars)
+        f_full = extract_features(balls, stars, self.stats)
+        fm     = self._mask(f_full.reshape(1, -1))[0]
+        z      = (fm - self.stats.ref_mean) / self.stats.ref_std
+        score  = float(self.clf.predict_proba(
+            self.scaler.transform(fm.reshape(1, -1))
         )[0, 1])
 
         return {
@@ -508,12 +532,12 @@ class ScoringModel:
             "score":  round(score * 100, 2),
             "features": {
                 name: {
-                    "value":      round(float(f[i]), 4),
+                    "value":      round(float(fm[i]), 4),
                     "ref_mean":   round(float(self.stats.ref_mean[i]), 4),
                     "z_score":    round(float(z[i]), 3),
                     "importance": round(float(self.importances[i]), 5),
                 }
-                for i, name in enumerate(FEATURE_NAMES)
+                for i, name in enumerate(self._active_names())
             },
         }
 
@@ -579,6 +603,8 @@ def walk_forward_backtest(
     n_neg_ratio: int = 10,
     n_samples_ranking: int = 200,
     seed: int = 42,
+    feature_mask: list[int] | None = None,
+    label: str = "",
 ) -> dict:
     """
     Pour chaque tirage t parmi les last_n derniers :
@@ -613,7 +639,8 @@ def walk_forward_backtest(
             continue
 
         # Entraînement sur les t premiers tirages
-        model = ScoringModel(n_neg_ratio=n_neg_ratio, seed=seed, fast=True)
+        model = ScoringModel(n_neg_ratio=n_neg_ratio, seed=seed, fast=True,
+                             feature_mask=feature_mask)
         model.fit(train_df)
 
         # Classement des boules avec ce modèle
@@ -1039,8 +1066,10 @@ def main() -> None:
     n_neg_ratio = int(next(
         (args[i + 1] for i, a in enumerate(args) if a == "--n-neg"), "20"
     ))
-    no_plots    = "--no-plots" in args
-    run_ablation = "--ablation" in args
+    no_plots         = "--no-plots" in args
+    run_ablation     = "--ablation" in args
+    select_features  = "--select-features" in args   # exclut cooc_pairs + deficit
+    compare_features = "--compare-features" in args  # montre les deux modèles
 
     # ── Chargement ────────────────────────────────────────────────────────
     if not CACHE_CSV.exists():
@@ -1056,50 +1085,77 @@ def main() -> None:
     )
 
     # ── Walk-forward backtest ─────────────────────────────────────────────
-    bt = walk_forward_backtest(df, last_n=last_n, n_neg_ratio=10, n_samples_ranking=200)
+    active_mask  = SELECTED_INDICES if select_features else None
+    mask_label   = f"44 features sélectionnées" if select_features else "52 features"
+
+    bt = walk_forward_backtest(df, last_n=last_n, n_neg_ratio=10,
+                               n_samples_ranking=200, feature_mask=active_mask)
 
     THRESH_B = [5, 10, 15, 20, 25, 30]
     THRESH_S = [2, 3, 4, 5, 6]
-    bth      = bt["by_threshold"]
     S = "=" * 68
 
-    print(f"\n{S}")
-    print(f"  RÉSUMÉ – {bt['n_test_draws']} tirages testés")
-    print(S)
+    def _print_bt_summary(bt_res: dict, title: str) -> None:
+        bth = bt_res["by_threshold"]
+        print(f"\n{S}")
+        print(f"  {title}")
+        print(S)
+        print(f"\n  {'Top K':<8}  {'Trouvées':<10}  {'Aléatoire':<12}  "
+              f"{'≥2':>5}  {'≥3':>5}  {'≥4':>5}  {'Δ vs aléatoire':>15}")
+        print(f"  {'-'*72}")
+        for k in THRESH_B:
+            d    = bth[f"balls_top{k}"]
+            mf, exp  = d["mean_found"], d["expected_random"]
+            diff = mf - exp
+            flag = " ▲" if diff > 0.05 else (" ▼" if diff < -0.05 else "")
+            print(f"  Top {k:<4}  {mf:<10.3f}  {exp:<12.3f}  "
+                  f"{d['pct_ge2']:>5.1f}  {d['pct_ge3']:>5.1f}  {d['pct_ge4']:>5.1f}"
+                  f"  {diff:>+8.3f}{flag}")
+        print(f"\n  {'Étoiles Top K':<14}  {'Trouvées':<10}  {'Aléatoire'}")
+        print(f"  {'-'*40}")
+        for k in THRESH_S:
+            d = bth.get(f"stars_top{k}")
+            if d is None:
+                continue
+            diff = d["mean_found"] - d["expected_random"]
+            print(f"  Top {k:<10}  {d['mean_found']:<10.3f}  {d['expected_random']:.3f}"
+                  f"  ({diff:+.3f})")
+        best_found = bth["balls_top30"]["mean_found"]
+        best_exp   = bth["balls_top30"]["expected_random"]
+        diff_pct   = (best_found - best_exp) / best_exp * 100
+        if abs(diff_pct) < 3:
+            verdict = "≈ aléatoire."
+        elif diff_pct > 0:
+            verdict = f"+{diff_pct:.1f}% au-dessus de l'aléatoire dans le top 30."
+        else:
+            verdict = f"{diff_pct:.1f}% sous l'aléatoire dans le top 30."
+        print(f"\n  → {verdict}")
 
-    print(f"\n  {'Top K':<8}  {'Trouvées':<10}  {'Aléatoire':<12}  "
-          f"{'≥2':>5}  {'≥3':>5}  {'≥4':>5}  {'Δ vs aléatoire':>15}")
-    print(f"  {'-'*72}")
-    for k in THRESH_B:
-        d    = bth[f"balls_top{k}"]
-        mf   = d["mean_found"]
-        exp  = d["expected_random"]
-        diff = mf - exp
-        flag = " ▲" if diff > 0.05 else (" ▼" if diff < -0.05 else "")
-        print(f"  Top {k:<4}  {mf:<10.3f}  {exp:<12.3f}  "
-              f"{d['pct_ge2']:>5.1f}  {d['pct_ge3']:>5.1f}  {d['pct_ge4']:>5.1f}"
-              f"  {diff:>+8.3f}{flag}")
+    _print_bt_summary(bt, f"RÉSUMÉ – {bt['n_test_draws']} tirages  [{mask_label}]")
 
-    print(f"\n  {'Étoiles Top K':<14}  {'Trouvées':<10}  {'Aléatoire'}")
-    print(f"  {'-'*40}")
-    for k in THRESH_S:
-        d = bth.get(f"stars_top{k}")
-        if d is None:
-            continue
-        diff = d["mean_found"] - d["expected_random"]
-        print(f"  Top {k:<10}  {d['mean_found']:<10.3f}  {d['expected_random']:.3f}"
-              f"  ({diff:+.3f})")
+    # ── Comparaison (--compare-features) ─────────────────────────────────
+    if compare_features:
+        other_mask  = None if select_features else SELECTED_INDICES
+        other_label = "52 features (toutes)" if select_features else "44 features sélectionnées"
+        print(f"\n  Comparaison : backtest avec {other_label}…")
+        bt_other = walk_forward_backtest(df, last_n=last_n, n_neg_ratio=10,
+                                         n_samples_ranking=200, feature_mask=other_mask)
+        _print_bt_summary(bt_other, f"COMPARAISON – {bt_other['n_test_draws']} tirages  [{other_label}]")
 
-    best_found = bth["balls_top30"]["mean_found"]
-    best_exp   = bth["balls_top30"]["expected_random"]
-    diff_pct   = (best_found - best_exp) / best_exp * 100
-    if abs(diff_pct) < 3:
-        verdict = "Le modèle ne trouve pas plus de chiffres que l'aléatoire (résultat attendu : loterie)."
-    elif diff_pct > 0:
-        verdict = f"Le modèle trouve légèrement plus de boules que l'aléatoire (+{diff_pct:.1f}% dans le top 30)."
-    else:
-        verdict = f"Le modèle est légèrement sous l'aléatoire ({diff_pct:.1f}% dans le top 30)."
-    print(f"\n  → {verdict}")
+        # Tableau côte à côte
+        print(f"\n{S}")
+        print(f"  COMPARAISON DIRECTE  –  Top K boules trouvées")
+        print(S)
+        print(f"\n  Top K   {mask_label:>26}  {other_label:>26}  Δ")
+        print(f"  {'-'*70}")
+        bth_a = bt["by_threshold"]
+        bth_b = bt_other["by_threshold"]
+        for k in THRESH_B:
+            a = bth_a[f"balls_top{k}"]["mean_found"]
+            b = bth_b[f"balls_top{k}"]["mean_found"]
+            delta = a - b
+            flag  = " ▲" if delta > 0.05 else (" ▼" if delta < -0.05 else "")
+            print(f"  Top {k:<3}  {a:>26.3f}  {b:>26.3f}  {delta:>+.3f}{flag}")
 
     # Sauvegarde backtest
     STATS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1113,10 +1169,10 @@ def main() -> None:
     print("  MODÈLE FINAL  (entraîné sur tous les tirages sauf le dernier)")
     print(S)
     print("\nEntraînement…")
-    model = ScoringModel(n_neg_ratio=n_neg_ratio)
+    model = ScoringModel(n_neg_ratio=n_neg_ratio, feature_mask=active_mask)
     model.fit(df.iloc[:-1].reset_index(drop=True))
 
-    fi_sorted = sorted(zip(FEATURE_NAMES, model.importances), key=lambda x: -x[1])
+    fi_sorted = sorted(zip(model._active_names(), model.importances), key=lambda x: -x[1])
     print("\n  Top 10 features :")
     for name, imp in fi_sorted[:10]:
         bar = "█" * int(imp * 400)
