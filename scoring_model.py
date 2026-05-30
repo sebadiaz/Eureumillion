@@ -313,20 +313,31 @@ class ScoringModel:
     Utilisé pour scorer et expliquer n'importe quelle sélection.
     """
 
-    def __init__(self, n_neg_ratio: int = 20, seed: int = 42) -> None:
+    def __init__(self, n_neg_ratio: int = 20, seed: int = 42, fast: bool = False) -> None:
         self.n_neg_ratio = n_neg_ratio
         self.seed        = seed
         self.stats:  DrawStats | None = None
         self.scaler  = StandardScaler()
-        self.clf     = GradientBoostingClassifier(
-            n_estimators=600,
-            max_depth=4,
-            learning_rate=0.03,
-            subsample=0.8,
-            min_samples_leaf=5,
-            random_state=seed,
-        )
-        # Baseline linéaire pour comparaison
+        if fast:
+            # Version allégée pour le walk-forward (un modèle par tirage)
+            self.clf = GradientBoostingClassifier(
+                n_estimators=200,
+                max_depth=3,
+                learning_rate=0.1,
+                subsample=0.8,
+                min_samples_leaf=10,
+                random_state=seed,
+            )
+        else:
+            # Version complète pour le scoring final
+            self.clf = GradientBoostingClassifier(
+                n_estimators=600,
+                max_depth=4,
+                learning_rate=0.03,
+                subsample=0.8,
+                min_samples_leaf=5,
+                random_state=seed,
+            )
         self.lr      = LogisticRegression(max_iter=1000, random_state=seed)
         self.importances: np.ndarray | None = None
 
@@ -452,84 +463,113 @@ class ScoringModel:
         ranked_stars = sorted(star_scores.keys(), key=lambda s: -star_scores[s])
         return ranked_balls, ranked_stars, ball_scores, star_scores
 
-    # ── Backtest chronologique ────────────────────────────────────────────
 
-    def backtest(
-        self,
-        test_df: pd.DataFrame,
-        n_samples_ranking: int = 500,
-        seed: int = 99,
-    ) -> dict:
-        """
-        Classe tous les numéros 1-50 et les étoiles par score marginal,
-        puis mesure sur chaque tirage de test combien de boules réelles
-        figurent dans le top K du classement.
-        Retourne le détail par seuil K.
-        """
-        random.seed(seed)
 
-        ranked_balls, ranked_stars, ball_scores, star_scores = self.rank_numbers(
-            n_samples=n_samples_ranking, seed=seed
-        )
-        max_s = self.stats.max_star
+# ---------------------------------------------------------------------------
+# Walk-forward backtest (vrai backtest chronologique)
+# ---------------------------------------------------------------------------
 
-        THRESH_B = [5, 10, 15, 20, 25, 30]
-        THRESH_S = [2, 3, 4, 5, 6]
+def walk_forward_backtest(
+    df: pd.DataFrame,
+    last_n: int = 20,
+    n_neg_ratio: int = 10,
+    n_samples_ranking: int = 200,
+    seed: int = 42,
+) -> dict:
+    """
+    Pour chaque tirage t parmi les last_n derniers :
+      1. Entraîne un modèle sur tous les tirages 0..t-1
+      2. Classe les boules 1-50 par score marginal
+      3. Mesure combien de boules du tirage t sont dans le top K
+    Puis recommence pour t-1 (entraîne sur 0..t-2, teste t-1), etc.
+    Résultat : vrai backtest sans fuite d'information.
+    """
+    THRESH_B = [5, 10, 15, 20, 25, 30]
+    THRESH_S = [2, 3, 4, 5, 6]
 
-        per_draw: list[dict] = []
-        for _, row in test_df.iterrows():
-            actual_balls = {int(row[c]) for c in BALL_COLS if pd.notna(row[c])}
-            actual_stars = {int(row[c]) for c in STAR_COLS if pd.notna(row[c])}
-            if len(actual_balls) != 5 or len(actual_stars) != 2:
-                continue
-            draw: dict = {}
-            for k in THRESH_B:
-                draw[f"balls_top{k}"] = len(actual_balls & set(ranked_balls[:k]))
-            for k in THRESH_S:
-                ks = min(k, max_s)
-                draw[f"stars_top{ks}"] = len(actual_stars & set(ranked_stars[:ks]))
-            per_draw.append(draw)
+    per_draw: list[dict] = []
 
-        n = len(per_draw)
-        by_threshold: dict = {}
+    hdr = (f"  {'Tirage':<12}  {'Boules tirées':<18}"
+           f"  {'T5':>3}  {'T10':>3}  {'T15':>3}  {'T20':>3}  {'T25':>3}  {'T30':>3}")
+    print(hdr)
+    print("  " + "─" * (len(hdr) - 2))
 
+    for i in range(last_n):
+        # t = index (0-based) du tirage à prédire
+        t = len(df) - last_n + i
+        if t < 100:
+            continue  # besoin d'au moins 100 tirages pour entraîner
+
+        train_df = df.iloc[:t].reset_index(drop=True)
+        test_row = df.iloc[t]
+
+        actual_balls = {int(test_row[c]) for c in BALL_COLS if pd.notna(test_row[c])}
+        actual_stars = {int(test_row[c]) for c in STAR_COLS if pd.notna(test_row[c])}
+        if len(actual_balls) != 5 or len(actual_stars) != 2:
+            continue
+
+        # Entraînement sur les t premiers tirages
+        model = ScoringModel(n_neg_ratio=n_neg_ratio, seed=seed, fast=True)
+        model.fit(train_df)
+
+        # Classement des boules avec ce modèle
+        ranked_b, ranked_s, _, _ = model.rank_numbers(n_samples=n_samples_ranking, seed=seed)
+        max_s = model.stats.max_star
+
+        draw: dict = {"date": str(test_row["date"].date())}
         for k in THRESH_B:
-            key      = f"balls_top{k}"
-            vals     = [r[key] for r in per_draw]
-            expected = 5 * k / 50          # espérance hypergéométrique
-            counts   = Counter(vals)
-            by_threshold[key] = {
-                "k":               k,
-                "mean_found":      round(float(np.mean(vals)), 3),
-                "expected_random": round(expected, 3),
-                "dist":            {str(i): counts.get(i, 0) for i in range(6)},
-                "pct_ge2":         round(float(np.mean([v >= 2 for v in vals])) * 100, 1),
-                "pct_ge3":         round(float(np.mean([v >= 3 for v in vals])) * 100, 1),
-                "pct_ge4":         round(float(np.mean([v >= 4 for v in vals])) * 100, 1),
-            }
-
+            draw[f"balls_top{k}"] = len(actual_balls & set(ranked_b[:k]))
         for k in THRESH_S:
-            ks       = min(k, max_s)
-            key      = f"stars_top{ks}"
-            vals     = [r[key] for r in per_draw]
-            expected = 2 * ks / max_s
-            counts   = Counter(vals)
-            by_threshold[key] = {
-                "k":               ks,
-                "mean_found":      round(float(np.mean(vals)), 3),
-                "expected_random": round(expected, 3),
-                "dist":            {str(i): counts.get(i, 0) for i in range(3)},
-            }
+            ks = min(k, max_s)
+            draw[f"stars_top{ks}"] = len(actual_stars & set(ranked_s[:ks]))
+        per_draw.append(draw)
 
-        return {
-            "n_test_draws":  n,
-            "ranked_balls":  ranked_balls,
-            "ranked_stars":  ranked_stars,
-            "ball_scores":   {str(b): round(ball_scores[b], 6) for b in range(1, 51)},
-            "star_scores":   {str(s): round(star_scores[s], 6) for s in range(1, max_s + 1)},
-            "by_threshold":  by_threshold,
-            "per_draw":      per_draw,
+        balls_str = " ".join(f"{b:2d}" for b in sorted(actual_balls))
+        print(
+            f"  {draw['date']:<12}  {balls_str:<18}"
+            f"  {draw['balls_top5']:>3}"
+            f"  {draw['balls_top10']:>3}"
+            f"  {draw['balls_top15']:>3}"
+            f"  {draw['balls_top20']:>3}"
+            f"  {draw['balls_top25']:>3}"
+            f"  {draw['balls_top30']:>3}"
+        )
+
+    n = len(per_draw)
+    by_threshold: dict = {}
+
+    for k in THRESH_B:
+        key    = f"balls_top{k}"
+        vals   = [r[key] for r in per_draw]
+        exp    = 5 * k / 50
+        counts = Counter(vals)
+        by_threshold[key] = {
+            "k":               k,
+            "mean_found":      round(float(np.mean(vals)), 3),
+            "expected_random": round(exp, 3),
+            "dist":            {str(i): counts.get(i, 0) for i in range(6)},
+            "pct_ge2":         round(float(np.mean([v >= 2 for v in vals])) * 100, 1),
+            "pct_ge3":         round(float(np.mean([v >= 3 for v in vals])) * 100, 1),
+            "pct_ge4":         round(float(np.mean([v >= 4 for v in vals])) * 100, 1),
         }
+
+    for k in THRESH_S:
+        key    = f"stars_top{k}"
+        vals   = [r.get(key, 0) for r in per_draw]
+        exp    = 2 * k / 12
+        counts = Counter(vals)
+        by_threshold[key] = {
+            "k":               k,
+            "mean_found":      round(float(np.mean(vals)), 3),
+            "expected_random": round(exp, 3),
+            "dist":            {str(i): counts.get(i, 0) for i in range(3)},
+        }
+
+    return {
+        "n_test_draws":  n,
+        "by_threshold":  by_threshold,
+        "per_draw":      per_draw,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +746,7 @@ def main() -> None:
         user_combo = (sorted(nums[:5]), sorted(nums[5:]))
 
     last_n = int(next(
-        (args[i + 1] for i, a in enumerate(args) if a == "--last-n"), "100"
+        (args[i + 1] for i, a in enumerate(args) if a == "--last-n"), "20"
     ))
     n_neg_ratio = int(next(
         (args[i + 1] for i, a in enumerate(args) if a == "--n-neg"), "20"
@@ -719,25 +759,73 @@ def main() -> None:
         sys.exit(1)
 
     df = load_results()
+    last_n = min(last_n, len(df) - 100)
     print(f"{len(df)} tirages  [{df['date'].min().date()} → {df['date'].max().date()}]")
-
-    # ── Split : tout sauf les last_n derniers tirages ─────────────────────
-    last_n = min(last_n, len(df) - 50)   # laisser au moins 50 tirages en train
-    train_df = df.iloc[:-last_n].reset_index(drop=True)
-    test_df  = df.iloc[-last_n:].reset_index(drop=True)
     print(
-        f"Train : {len(train_df)} tirages "
-        f"[{train_df['date'].min().date()} → {train_df['date'].max().date()}]"
-    )
-    print(
-        f"Test  : {len(test_df)} tirages "
-        f"[{test_df['date'].min().date()} → {test_df['date'].max().date()}]"
+        f"Walk-forward backtest sur les {last_n} derniers tirages\n"
+        f"  (chaque tirage est prédit par un modèle entraîné sur tous les tirages précédents)\n"
     )
 
-    # ── Entraînement ──────────────────────────────────────────────────────
+    # ── Walk-forward backtest ─────────────────────────────────────────────
+    bt = walk_forward_backtest(df, last_n=last_n, n_neg_ratio=10, n_samples_ranking=200)
+
+    THRESH_B = [5, 10, 15, 20, 25, 30]
+    THRESH_S = [2, 3, 4, 5, 6]
+    bth      = bt["by_threshold"]
+    S = "=" * 68
+
+    print(f"\n{S}")
+    print(f"  RÉSUMÉ – {bt['n_test_draws']} tirages testés")
+    print(S)
+
+    print(f"\n  {'Top K':<8}  {'Trouvées':<10}  {'Aléatoire':<12}  "
+          f"{'≥2':>5}  {'≥3':>5}  {'≥4':>5}  {'Δ vs aléatoire':>15}")
+    print(f"  {'-'*72}")
+    for k in THRESH_B:
+        d    = bth[f"balls_top{k}"]
+        mf   = d["mean_found"]
+        exp  = d["expected_random"]
+        diff = mf - exp
+        flag = " ▲" if diff > 0.05 else (" ▼" if diff < -0.05 else "")
+        print(f"  Top {k:<4}  {mf:<10.3f}  {exp:<12.3f}  "
+              f"{d['pct_ge2']:>5.1f}  {d['pct_ge3']:>5.1f}  {d['pct_ge4']:>5.1f}"
+              f"  {diff:>+8.3f}{flag}")
+
+    print(f"\n  {'Étoiles Top K':<14}  {'Trouvées':<10}  {'Aléatoire'}")
+    print(f"  {'-'*40}")
+    for k in THRESH_S:
+        d = bth.get(f"stars_top{k}")
+        if d is None:
+            continue
+        diff = d["mean_found"] - d["expected_random"]
+        print(f"  Top {k:<10}  {d['mean_found']:<10.3f}  {d['expected_random']:.3f}"
+              f"  ({diff:+.3f})")
+
+    best_found = bth["balls_top30"]["mean_found"]
+    best_exp   = bth["balls_top30"]["expected_random"]
+    diff_pct   = (best_found - best_exp) / best_exp * 100
+    if abs(diff_pct) < 3:
+        verdict = "Le modèle ne trouve pas plus de chiffres que l'aléatoire (résultat attendu : loterie)."
+    elif diff_pct > 0:
+        verdict = f"Le modèle trouve légèrement plus de boules que l'aléatoire (+{diff_pct:.1f}% dans le top 30)."
+    else:
+        verdict = f"Le modèle est légèrement sous l'aléatoire ({diff_pct:.1f}% dans le top 30)."
+    print(f"\n  → {verdict}")
+
+    # Sauvegarde backtest
+    STATS_DIR.mkdir(parents=True, exist_ok=True)
+    bt_save = {k: v for k, v in bt.items() if k != "per_draw"}
+    (STATS_DIR / "backtest.json").write_text(
+        json.dumps(bt_save, indent=2, ensure_ascii=False)
+    )
+
+    # ── Modèle final (entraîné sur tous les tirages sauf le dernier) ──────
+    print(f"\n{S}")
+    print("  MODÈLE FINAL  (entraîné sur tous les tirages sauf le dernier)")
+    print(S)
     print("\nEntraînement…")
     model = ScoringModel(n_neg_ratio=n_neg_ratio)
-    model.fit(train_df)
+    model.fit(df.iloc[:-1].reset_index(drop=True))
 
     fi_sorted = sorted(zip(FEATURE_NAMES, model.importances), key=lambda x: -x[1])
     print("\n  Top 10 features :")
@@ -745,82 +833,18 @@ def main() -> None:
         bar = "█" * int(imp * 400)
         print(f"    {name:<28}  {imp:.5f}  {bar}")
 
-    # ── Backtest ──────────────────────────────────────────────────────────
-    print(f"\nBacktest sur {len(test_df)} tirages…")
-    bt = model.backtest(test_df)
+    # Classement actuel des boules
+    print("\nClassement des boules (score marginal sur données actuelles)…")
+    ranked_b, ranked_s, _, _ = model.rank_numbers(n_samples=500)
+    max_s = model.stats.max_star
 
-    ranked_b = bt["ranked_balls"]
-    ranked_s = bt["ranked_stars"]
-    THRESH_B = [5, 10, 15, 20, 25, 30]
-    bth      = bt["by_threshold"]
-
-    S = "=" * 64
-    print(f"\n{S}")
-    print(f"  BACKTEST – {bt['n_test_draws']} derniers tirages")
-    print(S)
-
-    # Classement des boules
-    print("\n  Classement des boules par score (meilleur → moins bon) :")
+    print("\n  Classement des boules (meilleur → moins bon) :")
     for start in range(0, 50, 10):
         chunk = ranked_b[start:start + 10]
         nums  = "  ".join(f"{b:2d}" for b in chunk)
         print(f"    Rang {start+1:2d}-{start+10:2d} : {nums}")
-
-    # Classement des étoiles
-    max_s = model.stats.max_star
     print(f"\n  Classement des étoiles (1–{max_s}) :")
     print("   ", "  ".join(f"{s:2d}" for s in ranked_s))
-
-    # Table boules trouvées
-    print(f"\n  {'Top K':<8}  {'Trouvées':<10}  {'Aléatoire':<12}  "
-          f"{'≥2 trouvées':<13}  {'≥3 trouvées':<13}  {'≥4 trouvées'}")
-    print(f"  {'-'*75}")
-    for k in THRESH_B:
-        d   = bth[f"balls_top{k}"]
-        mf  = d["mean_found"]
-        exp = d["expected_random"]
-        g2  = d["pct_ge2"]
-        g3  = d["pct_ge3"]
-        g4  = d["pct_ge4"]
-        diff = mf - exp
-        flag = f" ({diff:+.2f})"
-        print(f"  Top {k:<4}  {mf:<10.3f}  {exp:<12.3f}  "
-              f"{g2:<13.1f}  {g3:<13.1f}  {g4:.1f}%")
-
-    # Table étoiles trouvées
-    THRESH_S = [2, 3, 4, 5, 6]
-    print(f"\n  {'Top K':<8}  {'Étoiles/2':<12}  {'Aléatoire'}")
-    print(f"  {'-'*35}")
-    for k in THRESH_S:
-        ks = min(k, max_s)
-        d  = bth.get(f"stars_top{ks}")
-        if d is None:
-            continue
-        print(f"  Top {ks:<4}  {d['mean_found']:<12.3f}  {d['expected_random']:.3f}")
-
-    # Verdict
-    best_found = bth["balls_top30"]["mean_found"]
-    best_exp   = bth["balls_top30"]["expected_random"]
-    diff_pct   = (best_found - best_exp) / best_exp * 100
-    if abs(diff_pct) < 3:
-        verdict = "Le modèle ne trouve pas plus de chiffres que l'aléatoire (attendu : loterie)."
-    elif diff_pct > 0:
-        verdict = (f"Le modèle trouve légèrement plus de boules que l'aléatoire "
-                   f"(+{diff_pct:.1f}% dans le top 30).")
-    else:
-        verdict = f"Le modèle est légèrement sous l'aléatoire ({diff_pct:.1f}%)."
-    print(f"\n  → {verdict}")
-
-    # Sauvegarde
-    STATS_DIR.mkdir(parents=True, exist_ok=True)
-    bt_save = {
-        k: v for k, v in bt.items()
-        if k != "per_draw"
-    }
-    bt_save["feature_importances"] = {n: round(float(v), 6) for n, v in fi_sorted}
-    (STATS_DIR / "backtest.json").write_text(
-        json.dumps(bt_save, indent=2, ensure_ascii=False)
-    )
 
     if not no_plots:
         print(f"\nGraphiques → {STATS_DIR}/")
