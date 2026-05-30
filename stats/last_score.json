@@ -1,0 +1,190 @@
+{
+  "balls": [
+    5,
+    14,
+    23,
+    42,
+    49
+  ],
+  "stars": [
+    2,
+    8
+  ],
+  "score": 13.4,
+  "features": {
+    "ball_freq_mean": {
+      "value": 0.1071,
+      "ref_mean": 0.1007,
+      "z_score": 1.814,
+      "importance": 0.12127
+    },
+    "ball_freq_min": {
+      "value": 0.1013,
+      "ref_mean": 0.0905,
+      "z_score": 1.895,
+      "importance": 0.03189
+    },
+    "ball_freq_max": {
+      "value": 0.1135,
+      "ref_mean": 0.1098,
+      "z_score": 1.099,
+      "importance": 0.01572
+    },
+    "ball_freq_std": {
+      "value": 0.0045,
+      "ref_mean": 0.007,
+      "z_score": -1.177,
+      "importance": 0.10923
+    },
+    "ball_rec_mean": {
+      "value": 10.2,
+      "ref_mean": 8.5908,
+      "z_score": 0.39,
+      "importance": 0.0743
+    },
+    "ball_rec_max": {
+      "value": 27.0,
+      "ref_mean": 21.5628,
+      "z_score": 0.483,
+      "importance": 0.01265
+    },
+    "ball_rec_std": {
+      "value": 8.8859,
+      "ref_mean": 7.6075,
+      "z_score": 0.303,
+      "importance": 0.12931
+    },
+    "star_freq_mean": {
+      "value": 1.0846,
+      "ref_mean": 1.0041,
+      "z_score": 1.875,
+      "importance": 0.04813
+    },
+    "star_freq_min": {
+      "value": 1.0638,
+      "ref_mean": 0.9643,
+      "z_score": 1.983,
+      "importance": 0.01385
+    },
+    "star_rec_mean": {
+      "value": 4.0,
+      "ref_mean": 3.9663,
+      "z_score": 0.016,
+      "importance": 0.04236
+    },
+    "star_rec_max": {
+      "value": 5.0,
+      "ref_mean": 5.8545,
+      "z_score": -0.289,
+      "importance": 0.01425
+    },
+    "sum_balls": {
+      "value": 133.0,
+      "ref_mean": 126.866,
+      "z_score": 0.207,
+      "importance": 0.06103
+    },
+    "range_balls": {
+      "value": 44.0,
+      "ref_mean": 34.2282,
+      "z_score": 1.149,
+      "importance": 0.01553
+    },
+    "n_odd_balls": {
+      "value": 3.0,
+      "ref_mean": 2.5288,
+      "z_score": 0.44,
+      "importance": 0.00529
+    },
+    "n_low_balls": {
+      "value": 3.0,
+      "ref_mean": 2.5288,
+      "z_score": 0.453,
+      "importance": 0.00238
+    },
+    "n_dec_01_10": {
+      "value": 1.0,
+      "ref_mean": 0.9994,
+      "z_score": 0.001,
+      "importance": 0.00528
+    },
+    "n_dec_11_20": {
+      "value": 1.0,
+      "ref_mean": 1.0173,
+      "z_score": -0.02,
+      "importance": 0.00779
+    },
+    "n_dec_21_30": {
+      "value": 1.0,
+      "ref_mean": 1.0346,
+      "z_score": -0.04,
+      "importance": 0.01143
+    },
+    "n_dec_31_40": {
+      "value": 0.0,
+      "ref_mean": 0.9647,
+      "z_score": -1.12,
+      "importance": 0.01129
+    },
+    "n_dec_41_50": {
+      "value": 2.0,
+      "ref_mean": 0.984,
+      "z_score": 1.245,
+      "importance": 0.00334
+    },
+    "decade_entropy": {
+      "value": 1.3322,
+      "ref_mean": 1.1548,
+      "z_score": 0.771,
+      "importance": 0.00854
+    },
+    "consec_gap_mean": {
+      "value": 11.0,
+      "ref_mean": 8.5571,
+      "z_score": 1.149,
+      "importance": 0.01848
+    },
+    "consec_gap_std": {
+      "value": 4.6904,
+      "ref_mean": 5.7911,
+      "z_score": -0.42,
+      "importance": 0.08475
+    },
+    "consec_gap_min": {
+      "value": 7.0,
+      "ref_mean": 2.5699,
+      "z_score": 2.631,
+      "importance": 0.01703
+    },
+    "consec_gap_max": {
+      "value": 19.0,
+      "ref_mean": 17.1571,
+      "z_score": 0.305,
+      "importance": 0.01983
+    },
+    "n_consec_pairs": {
+      "value": 0.0,
+      "ref_mean": 0.3814,
+      "z_score": -0.674,
+      "importance": 0.00789
+    },
+    "sum_stars": {
+      "value": 10.0,
+      "ref_mean": 11.9538,
+      "z_score": -0.45,
+      "importance": 0.07555
+    },
+    "star_gap": {
+      "value": 6.0,
+      "ref_mean": 4.0308,
+      "z_score": 0.784,
+      "importance": 0.02716
+    },
+    "n_stars_low_half": {
+      "value": 1.0,
+      "ref_mean": 1.1006,
+      "z_score": -0.149,
+      "importance": 0.00447
+    }
+  }
+}
