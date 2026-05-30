@@ -11,11 +11,11 @@ aux combinaisons historiquement sorties.
    d'une combinaison, il ne prédit pas le prochain tirage.
 
 Usage :
-  python scoring_model.py                               # entraîne + backtest
-  python scoring_model.py --score 5 14 23 42 49 2 8     # score 5 boules + 2 étoiles
-  python scoring_model.py --train-ratio 0.8             # défaut 0.80
-  python scoring_model.py --n-neg 20                    # ratio négatifs/positifs
-  python scoring_model.py --no-plots                    # sans graphiques
+  python scoring_model.py                                # entraîne + backtest (100 derniers tirages)
+  python scoring_model.py --last-n 200                   # tester sur les 200 derniers tirages
+  python scoring_model.py --score 5 14 23 42 49 2 8      # score 5 boules + 2 étoiles
+  python scoring_model.py --n-neg 20                     # ratio négatifs/positifs
+  python scoring_model.py --no-plots                     # sans graphiques
 """
 
 import json
@@ -30,7 +30,6 @@ import pandas as pd
 from scipy.stats import entropy as scipy_entropy
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -353,74 +352,133 @@ class ScoringModel:
             },
         }
 
+    # ── Classement marginal des numéros ──────────────────────────────────
+
+    def rank_numbers(
+        self,
+        n_samples: int = 300,
+        seed: int = 0,
+    ) -> tuple[list[int], list[int], dict, dict]:
+        """
+        Pour chaque boule (1-50) et chaque étoile (1-max_star), calcule un
+        score marginal en moyennant le score du modèle sur n_samples combinaisons
+        aléatoires contenant ce numéro.
+        Retourne (ranked_balls, ranked_stars, ball_scores, star_scores).
+        """
+        random.seed(seed)
+        max_s = self.stats.max_star
+
+        # ── Score marginal des boules ─────────────────────────────────────
+        all_ball_combos: list[tuple] = []
+        for b in range(1, 51):
+            pool = [x for x in range(1, 51) if x != b]
+            for _ in range(n_samples):
+                others = random.sample(pool, 4)
+                balls  = sorted([b] + others)
+                stars  = sorted(random.sample(range(1, max_s + 1), 2))
+                all_ball_combos.append((balls, stars))
+
+        ball_sc_flat = self.score_batch(all_ball_combos)
+        ball_scores: dict[int, float] = {}
+        for i, b in enumerate(range(1, 51)):
+            ball_scores[b] = float(np.mean(ball_sc_flat[i * n_samples:(i + 1) * n_samples]))
+
+        # ── Score marginal des étoiles ────────────────────────────────────
+        all_star_combos: list[tuple] = []
+        for s in range(1, max_s + 1):
+            pool = [x for x in range(1, max_s + 1) if x != s]
+            for _ in range(n_samples):
+                balls = sorted(random.sample(range(1, 51), 5))
+                other = random.choice(pool)
+                stars = sorted([s, other])
+                all_star_combos.append((balls, stars))
+
+        star_sc_flat = self.score_batch(all_star_combos)
+        star_scores: dict[int, float] = {}
+        for i, s in enumerate(range(1, max_s + 1)):
+            star_scores[s] = float(np.mean(star_sc_flat[i * n_samples:(i + 1) * n_samples]))
+
+        ranked_balls = sorted(ball_scores.keys(), key=lambda b: -ball_scores[b])
+        ranked_stars = sorted(star_scores.keys(), key=lambda s: -star_scores[s])
+        return ranked_balls, ranked_stars, ball_scores, star_scores
+
     # ── Backtest chronologique ────────────────────────────────────────────
 
     def backtest(
         self,
         test_df: pd.DataFrame,
-        n_random_per_draw: int = 200,
+        n_samples_ranking: int = 300,
         seed: int = 99,
     ) -> dict:
         """
-        Pour chaque tirage de test :
-          - score la vraie combinaison
-          - score n_random_per_draw combinaisons aléatoires
-          - calcule le percentile du vrai tirage parmi les aléatoires
-        Retourne AUC, percentiles, et données pour les graphiques.
+        Classe tous les numéros 1-50 et les étoiles par score marginal,
+        puis mesure sur chaque tirage de test combien de boules réelles
+        figurent dans le top K du classement.
+        Retourne le détail par seuil K.
         """
         random.seed(seed)
 
-        # ── Construction de toutes les combinaisons à scorer (batch) ─────
-        actual_combos:  list[tuple] = []
-        random_combos:  list[tuple] = []
-        valid_rows:     list[int]   = []
+        ranked_balls, ranked_stars, ball_scores, star_scores = self.rank_numbers(
+            n_samples=n_samples_ranking, seed=seed
+        )
+        max_s = self.stats.max_star
 
-        for i, (_, row) in enumerate(test_df.iterrows()):
-            balls = sorted([int(row[c]) for c in BALL_COLS if pd.notna(row[c])])
-            stars = sorted([int(row[c]) for c in STAR_COLS if pd.notna(row[c])])
-            if len(balls) != 5 or len(stars) != 2:
+        THRESH_B = [5, 10, 15, 20, 25, 30]
+        THRESH_S = [2, 3, 4, 5, 6]
+
+        per_draw: list[dict] = []
+        for _, row in test_df.iterrows():
+            actual_balls = {int(row[c]) for c in BALL_COLS if pd.notna(row[c])}
+            actual_stars = {int(row[c]) for c in STAR_COLS if pd.notna(row[c])}
+            if len(actual_balls) != 5 or len(actual_stars) != 2:
                 continue
-            actual_combos.append((balls, stars))
-            valid_rows.append(i)
-            for _ in range(n_random_per_draw):
-                random_combos.append(random_combination(self.stats.max_star))
+            draw: dict = {}
+            for k in THRESH_B:
+                draw[f"balls_top{k}"] = len(actual_balls & set(ranked_balls[:k]))
+            for k in THRESH_S:
+                ks = min(k, max_s)
+                draw[f"stars_top{ks}"] = len(actual_stars & set(ranked_stars[:ks]))
+            per_draw.append(draw)
 
-        n_actual = len(actual_combos)
-        # Single-pass feature extraction + batch prediction
-        all_combos = actual_combos + random_combos
-        all_scores = self.score_batch(all_combos)
+        n = len(per_draw)
+        by_threshold: dict = {}
 
-        actual_scores_arr = all_scores[:n_actual]
-        rand_scores_flat  = all_scores[n_actual:]
+        for k in THRESH_B:
+            key      = f"balls_top{k}"
+            vals     = [r[key] for r in per_draw]
+            expected = 5 * k / 50          # espérance hypergéométrique
+            counts   = Counter(vals)
+            by_threshold[key] = {
+                "k":               k,
+                "mean_found":      round(float(np.mean(vals)), 3),
+                "expected_random": round(expected, 3),
+                "dist":            {str(i): counts.get(i, 0) for i in range(6)},
+                "pct_ge2":         round(float(np.mean([v >= 2 for v in vals])) * 100, 1),
+                "pct_ge3":         round(float(np.mean([v >= 3 for v in vals])) * 100, 1),
+                "pct_ge4":         round(float(np.mean([v >= 4 for v in vals])) * 100, 1),
+            }
 
-        # ── Calcul des percentiles ────────────────────────────────────────
-        percentiles: list[float] = []
-        for i in range(n_actual):
-            rs  = rand_scores_flat[i * n_random_per_draw: (i + 1) * n_random_per_draw]
-            pct = float(np.mean(rs < actual_scores_arr[i])) * 100
-            percentiles.append(pct)
-
-        # ── AUC sur le jeu de test ────────────────────────────────────────
-        n_neg_auc = n_actual * 10
-        neg_auc   = [random_combination(self.stats.max_star) for _ in range(n_neg_auc)]
-        auc_combos = actual_combos + neg_auc
-        auc_scores = self.score_batch(auc_combos)
-        y_auc = np.array([1] * n_actual + [0] * n_neg_auc)
-        auc   = float(roc_auc_score(y_auc, auc_scores))
-        fpr, tpr, _ = roc_curve(y_auc, auc_scores)
+        for k in THRESH_S:
+            ks       = min(k, max_s)
+            key      = f"stars_top{ks}"
+            vals     = [r[key] for r in per_draw]
+            expected = 2 * ks / max_s
+            counts   = Counter(vals)
+            by_threshold[key] = {
+                "k":               ks,
+                "mean_found":      round(float(np.mean(vals)), 3),
+                "expected_random": round(expected, 3),
+                "dist":            {str(i): counts.get(i, 0) for i in range(3)},
+            }
 
         return {
-            "n_test_draws":         n_actual,
-            "n_random_per_draw":    n_random_per_draw,
-            "auc":                  round(auc, 4),
-            "mean_percentile":      round(float(np.mean(percentiles)), 2),
-            "median_percentile":    round(float(np.median(percentiles)), 2),
-            "pct_draws_above_50":   round(float(np.mean(np.array(percentiles) > 50)) * 100, 1),
-            "percentiles":          percentiles,
-            "actual_scores":        actual_scores_arr.tolist(),
-            "random_scores_sample": rand_scores_flat[:1000].tolist(),
-            "roc_fpr":              fpr.tolist(),
-            "roc_tpr":              tpr.tolist(),
+            "n_test_draws":  n,
+            "ranked_balls":  ranked_balls,
+            "ranked_stars":  ranked_stars,
+            "ball_scores":   {str(b): round(ball_scores[b], 6) for b in range(1, 51)},
+            "star_scores":   {str(s): round(star_scores[s], 6) for s in range(1, max_s + 1)},
+            "by_threshold":  by_threshold,
+            "per_draw":      per_draw,
         }
 
 
@@ -429,62 +487,46 @@ class ScoringModel:
 # ---------------------------------------------------------------------------
 
 def plot_backtest(result: dict, out: Path) -> None:
-    pct   = result["percentiles"]
-    s_act = result["actual_scores"]
-    s_rnd = result["random_scores_sample"]
-    auc   = result["auc"]
+    bt      = result["by_threshold"]
+    n_draws = result["n_test_draws"]
+    THRESH_B = [5, 10, 15, 20, 25, 30]
 
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     fig.suptitle(
-        f"Backtest chronologique – {result['n_test_draws']} tirages de test "
-        f"({result['n_random_per_draw']} aléatoires/tirage)\n"
-        f"AUC = {auc:.4f}  ·  Percentile moyen = {result['mean_percentile']:.1f}%  "
-        f"·  % au-dessus de 50% = {result['pct_draws_above_50']:.1f}%",
-        fontsize=10,
+        f"Backtest – {n_draws} derniers tirages · boules trouvées dans le top K classement modèle",
+        fontsize=11,
     )
 
-    # 1. Distribution des percentiles
-    ax = axes[0, 0]
-    ax.hist(pct, bins=20, color="steelblue", edgecolor="white", alpha=0.85)
-    ax.axvline(50, color="red", ls="--", lw=1.3, label="50 % (aléatoire)")
-    ax.axvline(np.mean(pct), color="limegreen", ls="-", lw=1.5,
-               label=f"Moy. {np.mean(pct):.1f}%")
-    ax.set_xlabel("Percentile du tirage réel parmi les aléatoires")
-    ax.set_ylabel("Nombre de tirages")
-    ax.set_title("Distribution des percentiles")
+    # 1. Boules trouvées en moyenne vs aléatoire
+    ax = axes[0]
+    ks_b   = [bt[f"balls_top{k}"]["k"]               for k in THRESH_B]
+    found  = [bt[f"balls_top{k}"]["mean_found"]       for k in THRESH_B]
+    exp    = [bt[f"balls_top{k}"]["expected_random"]  for k in THRESH_B]
+    x      = np.arange(len(THRESH_B))
+    w      = 0.35
+    ax.bar(x - w/2, found, w, label="Modèle (moyenne réelle)", color="steelblue", alpha=0.85)
+    ax.bar(x + w/2, exp,   w, label="Espérance aléatoire",    color="salmon",    alpha=0.85)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"Top {k}" for k in THRESH_B])
+    ax.set_ylabel("Boules trouvées (sur 5)")
+    ax.set_title("Boules trouvées par seuil")
     ax.legend(fontsize=8)
+    ax.set_ylim(0, 5.5)
 
-    # 2. Scores réels vs aléatoires
-    ax = axes[0, 1]
-    ax.hist(s_rnd, bins=40, color="lightgrey", edgecolor="white",
-            alpha=0.85, label=f"Aléatoires (n={len(s_rnd)})", density=True)
-    ax.hist(s_act, bins=20, color="steelblue", edgecolor="white",
-            alpha=0.75, label=f"Tirages réels (n={len(s_act)})", density=True)
-    ax.set_xlabel("Score du modèle (0–1)")
-    ax.set_ylabel("Densité")
-    ax.set_title("Distribution des scores : réels vs aléatoires")
+    # 2. % de tirages avec ≥2 / ≥3 boules trouvées
+    ax = axes[1]
+    pct_ge2 = [bt[f"balls_top{k}"]["pct_ge2"] for k in THRESH_B]
+    pct_ge3 = [bt[f"balls_top{k}"]["pct_ge3"] for k in THRESH_B]
+    pct_ge4 = [bt[f"balls_top{k}"]["pct_ge4"] for k in THRESH_B]
+    ax.plot(THRESH_B, pct_ge2, "o-", color="steelblue",  label="≥ 2 boules trouvées")
+    ax.plot(THRESH_B, pct_ge3, "s-", color="darkorange",  label="≥ 3 boules trouvées")
+    ax.plot(THRESH_B, pct_ge4, "^-", color="seagreen",   label="≥ 4 boules trouvées")
+    ax.set_xlabel("Nombre de boules retenues (top K)")
+    ax.set_ylabel("% des tirages de test")
+    ax.set_title("% de tirages avec au moins N boules trouvées")
     ax.legend(fontsize=8)
-
-    # 3. Percentile au fil du temps (backtest)
-    ax = axes[1, 0]
-    ax.plot(pct, ".", ms=3, alpha=0.4, color="steelblue")
-    ax.axhline(50, color="red", ls="--", lw=1.0)
-    roll = pd.Series(pct).rolling(window=20, min_periods=5).mean()
-    ax.plot(roll.values, color="darkorange", lw=1.8, label="Moy. mobile 20")
-    ax.set_xlabel("Tirage (ordre chronologique)")
-    ax.set_ylabel("Percentile")
-    ax.set_title("Évolution du percentile dans le temps")
-    ax.legend(fontsize=8)
-
-    # 4. Courbe ROC
-    ax = axes[1, 1]
-    ax.plot(result["roc_fpr"], result["roc_tpr"], color="steelblue",
-            lw=1.5, label=f"GBT (AUC={auc:.4f})")
-    ax.plot([0, 1], [0, 1], "r--", lw=1.0, label="Aléatoire (AUC=0.5)")
-    ax.set_xlabel("Taux de faux positifs")
-    ax.set_ylabel("Taux de vrais positifs")
-    ax.set_title("Courbe ROC (test)")
-    ax.legend(fontsize=8)
+    ax.set_ylim(0, 105)
+    ax.grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
     path = out / "backtest.png"
@@ -613,8 +655,8 @@ def main() -> None:
             sys.exit(1)
         user_combo = (sorted(nums[:5]), sorted(nums[5:]))
 
-    train_ratio = float(next(
-        (args[i + 1] for i, a in enumerate(args) if a == "--train-ratio"), "0.80"
+    last_n = int(next(
+        (args[i + 1] for i, a in enumerate(args) if a == "--last-n"), "100"
     ))
     n_neg_ratio = int(next(
         (args[i + 1] for i, a in enumerate(args) if a == "--n-neg"), "20"
@@ -629,10 +671,10 @@ def main() -> None:
     df = load_results()
     print(f"{len(df)} tirages  [{df['date'].min().date()} → {df['date'].max().date()}]")
 
-    # ── Split chronologique ───────────────────────────────────────────────
-    split_idx = int(len(df) * train_ratio)
-    train_df  = df.iloc[:split_idx].reset_index(drop=True)
-    test_df   = df.iloc[split_idx:].reset_index(drop=True)
+    # ── Split : tout sauf les last_n derniers tirages ─────────────────────
+    last_n = min(last_n, len(df) - 50)   # laisser au moins 50 tirages en train
+    train_df = df.iloc[:-last_n].reset_index(drop=True)
+    test_df  = df.iloc[-last_n:].reset_index(drop=True)
     print(
         f"Train : {len(train_df)} tirages "
         f"[{train_df['date'].min().date()} → {train_df['date'].max().date()}]"
@@ -657,32 +699,73 @@ def main() -> None:
     print(f"\nBacktest sur {len(test_df)} tirages…")
     bt = model.backtest(test_df)
 
-    S = "=" * 56
+    ranked_b = bt["ranked_balls"]
+    ranked_s = bt["ranked_stars"]
+    THRESH_B = [5, 10, 15, 20, 25, 30]
+    bth      = bt["by_threshold"]
+
+    S = "=" * 64
     print(f"\n{S}")
-    print("  RÉSULTATS DU BACKTEST")
+    print(f"  BACKTEST – {bt['n_test_draws']} derniers tirages")
     print(S)
-    print(f"  AUC (test)                 : {bt['auc']:.4f}")
-    print(f"  Percentile moyen           : {bt['mean_percentile']:.1f}%"
-          f"  (50% = aléatoire)")
-    print(f"  Percentile médian          : {bt['median_percentile']:.1f}%")
-    print(f"  Tirages réels > 50e pct    : {bt['pct_draws_above_50']:.1f}%"
-          f"  (50% = aléatoire)")
-    delta = bt["mean_percentile"] - 50.0
-    if abs(delta) < 2.5:
-        verdict = "Aucun pattern prédictif détecté (résultat attendu : loterie aléatoire)."
-    elif delta > 0:
-        verdict = (f"Le modèle capture des patterns légers "
-                   f"(+{delta:.1f}% au-dessus de l'aléatoire).")
+
+    # Classement des boules
+    print("\n  Classement des boules par score (meilleur → moins bon) :")
+    for start in range(0, 50, 10):
+        chunk = ranked_b[start:start + 10]
+        nums  = "  ".join(f"{b:2d}" for b in chunk)
+        print(f"    Rang {start+1:2d}-{start+10:2d} : {nums}")
+
+    # Classement des étoiles
+    max_s = model.stats.max_star
+    print(f"\n  Classement des étoiles (1–{max_s}) :")
+    print("   ", "  ".join(f"{s:2d}" for s in ranked_s))
+
+    # Table boules trouvées
+    print(f"\n  {'Top K':<8}  {'Trouvées':<10}  {'Aléatoire':<12}  "
+          f"{'≥2 trouvées':<13}  {'≥3 trouvées':<13}  {'≥4 trouvées'}")
+    print(f"  {'-'*75}")
+    for k in THRESH_B:
+        d   = bth[f"balls_top{k}"]
+        mf  = d["mean_found"]
+        exp = d["expected_random"]
+        g2  = d["pct_ge2"]
+        g3  = d["pct_ge3"]
+        g4  = d["pct_ge4"]
+        diff = mf - exp
+        flag = f" ({diff:+.2f})"
+        print(f"  Top {k:<4}  {mf:<10.3f}  {exp:<12.3f}  "
+              f"{g2:<13.1f}  {g3:<13.1f}  {g4:.1f}%")
+
+    # Table étoiles trouvées
+    THRESH_S = [2, 3, 4, 5, 6]
+    print(f"\n  {'Top K':<8}  {'Étoiles/2':<12}  {'Aléatoire'}")
+    print(f"  {'-'*35}")
+    for k in THRESH_S:
+        ks = min(k, max_s)
+        d  = bth.get(f"stars_top{ks}")
+        if d is None:
+            continue
+        print(f"  Top {ks:<4}  {d['mean_found']:<12.3f}  {d['expected_random']:.3f}")
+
+    # Verdict
+    best_found = bth["balls_top30"]["mean_found"]
+    best_exp   = bth["balls_top30"]["expected_random"]
+    diff_pct   = (best_found - best_exp) / best_exp * 100
+    if abs(diff_pct) < 3:
+        verdict = "Le modèle ne trouve pas plus de chiffres que l'aléatoire (attendu : loterie)."
+    elif diff_pct > 0:
+        verdict = (f"Le modèle trouve légèrement plus de boules que l'aléatoire "
+                   f"(+{diff_pct:.1f}% dans le top 30).")
     else:
-        verdict = f"Combinaisons réelles légèrement sous la médiane ({delta:.1f}%)."
+        verdict = f"Le modèle est légèrement sous l'aléatoire ({diff_pct:.1f}%)."
     print(f"\n  → {verdict}")
 
     # Sauvegarde
     STATS_DIR.mkdir(parents=True, exist_ok=True)
     bt_save = {
         k: v for k, v in bt.items()
-        if k not in ("percentiles", "actual_scores", "random_scores_sample",
-                     "roc_fpr", "roc_tpr")
+        if k != "per_draw"
     }
     bt_save["feature_importances"] = {n: round(float(v), 6) for n, v in fi_sorted}
     (STATS_DIR / "backtest.json").write_text(
