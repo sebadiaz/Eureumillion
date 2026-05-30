@@ -48,12 +48,15 @@ from euromillions_scraper import (
 BALL_COLS = ["ball_1", "ball_2", "ball_3", "ball_4", "ball_5"]
 STAR_COLS = ["star_1", "star_2"]
 
-# Noms des 39 features (même ordre que extract_features)
+# Noms des 41 features (même ordre que extract_features)
 FEATURE_NAMES: list[str] = [
     # Fréquence historique des boules
     "ball_freq_mean", "ball_freq_min", "ball_freq_max", "ball_freq_std",
-    # Log-produit des fréquences (capture mieux les boules rares)
+    # Log-produit des fréquences
     "ball_freq_log_sum",
+    # Déficit de fréquence : boules sous-représentées par rapport à l'espérance
+    # (valeur positive = la boule est "en retard" sur son quota)
+    "ball_freq_deficit_mean", "ball_freq_deficit_max",
     # Recency : nb de tirages depuis la dernière apparition de chaque boule
     "ball_rec_mean", "ball_rec_max", "ball_rec_std",
     # Fréquence des étoiles (ratio obs/espérance corrigée par période)
@@ -61,7 +64,7 @@ FEATURE_NAMES: list[str] = [
     # Recency étoiles
     "star_rec_mean", "star_rec_max",
     # Structure
-    "sum_balls", "sum_zscore",        # somme et son z-score vs distribution théorique
+    "sum_balls", "sum_zscore",
     "range_balls", "n_odd_balls", "n_low_balls",
     # Distribution par dizaine
     "n_dec_01_10", "n_dec_11_20", "n_dec_21_30", "n_dec_31_40", "n_dec_41_50",
@@ -83,7 +86,7 @@ FEATURE_NAMES: list[str] = [
     "ball_freq_momentum",
 ]
 
-assert len(FEATURE_NAMES) == 39
+assert len(FEATURE_NAMES) == 41
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +185,13 @@ class DrawStats:
             b: (sorted_b.index(b) + 1) / 50.0 for b in range(1, 51)
         }
 
+        # ── Déficit de fréquence (boules sous-représentées vs espérance) ──
+        expected_freq = 5.0 / 50.0  # = 0.10
+        self.ball_freq_deficit: dict[int, float] = {
+            b: max(0.0, expected_freq - self.ball_freq[b]) / expected_freq
+            for b in range(1, 51)
+        }
+
         # ── Distribution théorique de la somme (loi hypergéométrique approx.) ──
         # E[sum] = 5 × 51/2 = 127.5,  Var[sum] = 5 × (50²-1)/12 × (50-5)/(50-1) ≈ 218.75
         self.sum_mean = 127.5
@@ -202,7 +212,7 @@ def extract_features(
     stars: list[int],
     stats: DrawStats,
 ) -> np.ndarray:
-    """Retourne un vecteur de 36 features pour une combinaison donnée."""
+    """Retourne un vecteur de 41 features pour une combinaison donnée."""
     balls = sorted(balls)
     stars = sorted(stars)
 
@@ -247,6 +257,11 @@ def extract_features(
     # ── Log-produit des fréquences ───────────────────────────────────────
     freq_log_sum = float(np.sum(np.log(bf + 1e-9)))
 
+    # ── Déficit de fréquence (boules "en retard" sur leur quota) ─────────
+    deficit = np.array([stats.ball_freq_deficit.get(b, 0.0) for b in balls])
+    deficit_mean = float(deficit.mean())
+    deficit_max  = float(deficit.max())
+
     # ── Z-score de la somme vs distribution théorique ────────────────────
     sum_zscore = float((sum_b - stats.sum_mean) / stats.sum_std)
 
@@ -277,6 +292,7 @@ def extract_features(
     return np.array([
         bf_mean, bf_min, bf_max, bf_std,
         freq_log_sum,
+        deficit_mean, deficit_max,
         br_mean, br_max, br_std,
         sf_mean, sf_min,
         sr_mean, sr_max,
