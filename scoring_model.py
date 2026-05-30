@@ -15,6 +15,7 @@ Usage :
   python scoring_model.py --last-n 100                   # backtest sur 100 derniers tirages
   python scoring_model.py --recommend 100000             # top 20 sur 100 000 tirages aléatoires
   python scoring_model.py --score 5 14 23 42 49 2 8      # score une sélection
+  python scoring_model.py --ablation                     # étude d'ablation feature par feature + groupes
   python scoring_model.py --n-neg 20                     # ratio négatifs/positifs (défaut 20)
   python scoring_model.py --no-plots                     # sans graphiques
 """
@@ -48,45 +49,72 @@ from euromillions_scraper import (
 BALL_COLS = ["ball_1", "ball_2", "ball_3", "ball_4", "ball_5"]
 STAR_COLS = ["star_1", "star_2"]
 
-# Noms des 41 features (même ordre que extract_features)
+PRIMES:  frozenset[int] = frozenset({2,3,5,7,11,13,17,19,23,29,31,37,41,43,47})
+SQUARES: frozenset[int] = frozenset({1,4,9,16,25,36,49})
+
+# Noms des 52 features (même ordre que extract_features)
 FEATURE_NAMES: list[str] = [
-    # Fréquence historique des boules
+    # ── Fréquence historique des boules ───────────────────────────────────
     "ball_freq_mean", "ball_freq_min", "ball_freq_max", "ball_freq_std",
-    # Log-produit des fréquences
     "ball_freq_log_sum",
-    # Déficit de fréquence : boules sous-représentées par rapport à l'espérance
-    # (valeur positive = la boule est "en retard" sur son quota)
+    # ── Déficit de fréquence (boules sous-représentées vs espérance) ──────
     "ball_freq_deficit_mean", "ball_freq_deficit_max",
-    # Recency : nb de tirages depuis la dernière apparition de chaque boule
-    "ball_rec_mean", "ball_rec_max", "ball_rec_std",
-    # Fréquence des étoiles (ratio obs/espérance corrigée par période)
-    "star_freq_mean", "star_freq_min",
-    # Recency étoiles
-    "star_rec_mean", "star_rec_max",
-    # Structure
+    "ball_freq_deficit_std", "n_deficit_balls",
+    # ── Recency boules ─────────────────────────────────────────────────────
+    "ball_rec_mean", "ball_rec_max", "ball_rec_std", "ball_rec_min",
+    # ── Fréquence étoiles ──────────────────────────────────────────────────
+    "star_freq_mean", "star_freq_min", "star_freq_std",
+    # ── Recency étoiles ────────────────────────────────────────────────────
+    "star_rec_mean", "star_rec_max", "star_rec_min",
+    # ── Structure ──────────────────────────────────────────────────────────
     "sum_balls", "sum_zscore",
     "range_balls", "n_odd_balls", "n_low_balls",
-    # Distribution par dizaine
+    # ── Distribution par dizaine ───────────────────────────────────────────
     "n_dec_01_10", "n_dec_11_20", "n_dec_21_30", "n_dec_31_40", "n_dec_41_50",
-    "decade_entropy",
-    # Écarts entre boules consécutives
+    "decade_entropy", "max_same_decade",
+    # ── Écarts entre boules consécutives ───────────────────────────────────
     "consec_gap_mean", "consec_gap_std", "consec_gap_min", "consec_gap_max",
     "n_consec_pairs",
-    # Étoiles
+    # ── Étoiles ────────────────────────────────────────────────────────────
     "sum_stars", "star_gap", "n_stars_low_half",
-    # Fréquence récente (50 derniers tirages)
+    # ── Hot zones (50 et 10 derniers tirages) ──────────────────────────────
     "ball_hot50_mean", "ball_hot50_n",
-    # Co-occurrence historique des paires (mean + log-somme)
-    "pair_cooc_mean", "pair_cooc_max", "pair_cooc_log_sum",
-    # Rang de fréquence globale
-    "ball_rank_mean",
-    # Co-occurrence étoiles
-    "star_cooc",
-    # Décalage fréquence récente vs historique
+    "ball_hot10_mean", "ball_hot10_n",
     "ball_freq_momentum",
+    # ── Co-occurrence paires ───────────────────────────────────────────────
+    "pair_cooc_mean", "pair_cooc_max", "pair_cooc_log_sum", "pair_cooc_min",
+    # ── Rang + co-occurrence étoiles ───────────────────────────────────────
+    "ball_rank_mean",
+    "star_cooc",
+    # ── Numérologie (biais comportemental des joueurs) ─────────────────────
+    "n_prime_balls", "n_square_balls",
 ]
 
-assert len(FEATURE_NAMES) == 41
+assert len(FEATURE_NAMES) == 52
+
+# Groupes de features pour l'étude d'ablation
+FEATURE_GROUPS: dict[str, list[str]] = {
+    "freq_hist":    ["ball_freq_mean", "ball_freq_min", "ball_freq_max",
+                     "ball_freq_std", "ball_freq_log_sum"],
+    "deficit":      ["ball_freq_deficit_mean", "ball_freq_deficit_max",
+                     "ball_freq_deficit_std", "n_deficit_balls"],
+    "recency_ball": ["ball_rec_mean", "ball_rec_max", "ball_rec_std", "ball_rec_min"],
+    "star_freq":    ["star_freq_mean", "star_freq_min", "star_freq_std"],
+    "star_rec":     ["star_rec_mean", "star_rec_max", "star_rec_min"],
+    "structure":    ["sum_balls", "sum_zscore", "range_balls", "n_odd_balls", "n_low_balls"],
+    "decades":      ["n_dec_01_10", "n_dec_11_20", "n_dec_21_30", "n_dec_31_40",
+                     "n_dec_41_50", "decade_entropy", "max_same_decade"],
+    "gaps":         ["consec_gap_mean", "consec_gap_std", "consec_gap_min",
+                     "consec_gap_max", "n_consec_pairs"],
+    "stars_comb":   ["sum_stars", "star_gap", "n_stars_low_half"],
+    "hot_recent":   ["ball_hot50_mean", "ball_hot50_n", "ball_hot10_mean",
+                     "ball_hot10_n", "ball_freq_momentum"],
+    "cooc_pairs":   ["pair_cooc_mean", "pair_cooc_max",
+                     "pair_cooc_log_sum", "pair_cooc_min"],
+    "rank":         ["ball_rank_mean"],
+    "cooc_stars":   ["star_cooc"],
+    "numerology":   ["n_prime_balls", "n_square_balls"],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -173,11 +201,16 @@ class DrawStats:
         np.fill_diagonal(star_cooc_mat, 0.0)
         self.star_cooc_mat: np.ndarray = star_cooc_mat
 
-        # ── Fréquence récente (50 derniers tirages) ──────────────────────
+        # ── Fréquence récente (50 et 10 derniers tirages) ───────────────
         w50 = min(50, n)
         b50 = pd.concat([df.iloc[-w50:][c] for c in BALL_COLS]).dropna().astype(int)
         bc50 = Counter(b50.tolist())
         self.ball_freq_50: dict[int, float] = {b: bc50.get(b, 0) / w50 for b in range(1, 51)}
+
+        w10 = min(10, n)
+        b10 = pd.concat([df.iloc[-w10:][c] for c in BALL_COLS]).dropna().astype(int)
+        bc10 = Counter(b10.tolist())
+        self.ball_freq_10: dict[int, float] = {b: bc10.get(b, 0) / w10 for b in range(1, 51)}
 
         # ── Rang de fréquence globale (normalisé 0–1, plus petit = plus fréquent) ──
         sorted_b = sorted(range(1, 51), key=lambda b: -self.ball_freq[b])
@@ -222,15 +255,15 @@ def extract_features(
 
     # ── Boules – recency ─────────────────────────────────────────────────
     br = np.array([float(stats.ball_recency.get(b, stats.n_draws)) for b in balls])
-    br_mean, br_max, br_std = br.mean(), br.max(), br.std()
+    br_mean, br_max, br_std, br_min = br.mean(), br.max(), br.std(), br.min()
 
     # ── Étoiles – fréquence normalisée ───────────────────────────────────
     sf = np.array([stats.star_freq_ratio.get(s, 0.0) for s in stars])
-    sf_mean, sf_min = sf.mean(), sf.min()
+    sf_mean, sf_min, sf_std = sf.mean(), sf.min(), sf.std()
 
     # ── Étoiles – recency ────────────────────────────────────────────────
     sr = np.array([float(stats.star_recency.get(s, stats.n_draws)) for s in stars])
-    sr_mean, sr_max = sr.mean(), sr.max()
+    sr_mean, sr_max, sr_min = sr.mean(), sr.max(), sr.min()
 
     # ── Structure ────────────────────────────────────────────────────────
     sum_b   = float(sum(balls))           # théorique si uniforme : 127.5
@@ -242,6 +275,7 @@ def extract_features(
     dec = [(b - 1) // 10 for b in balls]          # 0–4
     dc  = [float(dec.count(d)) for d in range(5)]
     dec_ent = float(scipy_entropy(np.array(dc) + 1e-9))
+    max_dec = float(max(dc))
 
     # ── Écarts entre boules consécutives (triées) ────────────────────────
     gaps  = [balls[i + 1] - balls[i] for i in range(4)]
@@ -258,17 +292,23 @@ def extract_features(
     freq_log_sum = float(np.sum(np.log(bf + 1e-9)))
 
     # ── Déficit de fréquence (boules "en retard" sur leur quota) ─────────
-    deficit = np.array([stats.ball_freq_deficit.get(b, 0.0) for b in balls])
+    deficit      = np.array([stats.ball_freq_deficit.get(b, 0.0) for b in balls])
     deficit_mean = float(deficit.mean())
     deficit_max  = float(deficit.max())
+    deficit_std  = float(deficit.std())
+    n_deficit    = float((deficit > 0).sum())
 
     # ── Z-score de la somme vs distribution théorique ────────────────────
     sum_zscore = float((sum_b - stats.sum_mean) / stats.sum_std)
 
-    # ── Fréquence récente (50 derniers tirages) ───────────────────────────
+    # ── Fréquence récente (50 et 10 derniers tirages) ────────────────────
     bf50  = np.array([stats.ball_freq_50.get(b, 0.0) for b in balls])
     hot50_mean = float(bf50.mean())
     hot50_n    = float((bf50 > 0.0).sum())
+
+    bf10  = np.array([stats.ball_freq_10.get(b, 0.0) for b in balls])
+    hot10_mean = float(bf10.mean())
+    hot10_n    = float((bf10 > 0.0).sum())
 
     # ── Momentum : fréquence récente vs historique ────────────────────────
     ball_freq_momentum = float(hot50_mean - bf_mean)
@@ -280,7 +320,12 @@ def extract_features(
     ])
     cooc_mean    = float(cooc_vals.mean())
     cooc_max     = float(cooc_vals.max())
+    cooc_min     = float(cooc_vals.min())
     cooc_log_sum = float(np.sum(np.log(cooc_vals + 1e-6)))
+
+    # ── Numérologie ───────────────────────────────────────────────────────
+    n_prime  = float(sum(1 for b in balls if b in PRIMES))
+    n_square = float(sum(1 for b in balls if b in SQUARES))
 
     # ── Co-occurrence des étoiles ─────────────────────────────────────────
     star_cooc_val = float(stats.star_cooc_mat[stars[0] - 1, stars[1] - 1]) if len(stars) == 2 else 0.0
@@ -290,22 +335,36 @@ def extract_features(
     rank_mean = float(ranks.mean())
 
     return np.array([
+        # freq_hist (5)
         bf_mean, bf_min, bf_max, bf_std,
         freq_log_sum,
-        deficit_mean, deficit_max,
-        br_mean, br_max, br_std,
-        sf_mean, sf_min,
-        sr_mean, sr_max,
+        # deficit (4)
+        deficit_mean, deficit_max, deficit_std, n_deficit,
+        # recency_ball (4)
+        br_mean, br_max, br_std, br_min,
+        # star_freq (3)
+        sf_mean, sf_min, sf_std,
+        # star_rec (3)
+        sr_mean, sr_max, sr_min,
+        # structure (5)
         sum_b, sum_zscore,
         range_b, n_odd, n_low,
-        *dc, dec_ent,
+        # decades (7)
+        *dc, dec_ent, max_dec,
+        # gaps (5)
         g_mean, g_std, g_min, g_max, n_consec,
+        # stars_comb (3)
         sum_s, star_gap, n_s_low,
-        hot50_mean, hot50_n,
-        cooc_mean, cooc_max, cooc_log_sum,
+        # hot_recent (5)
+        hot50_mean, hot50_n, hot10_mean, hot10_n,
+        ball_freq_momentum,
+        # cooc_pairs (4)
+        cooc_mean, cooc_max, cooc_log_sum, cooc_min,
+        # rank + star_cooc (2)
         rank_mean,
         star_cooc_val,
-        ball_freq_momentum,
+        # numerology (2)
+        n_prime, n_square,
     ], dtype=float)
 
 
@@ -747,6 +806,187 @@ def plot_score_explanation(explain_result: dict, out: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Ablation study
+# ---------------------------------------------------------------------------
+
+def _fast_ablation_eval(
+    precomputed: list,
+    feat_indices: list[int],
+    n_samp: int,
+    seed: int,
+) -> float:
+    """Un passage walk-forward avec un sous-ensemble de features pré-calculé."""
+    per_draw_top30 = []
+    for item in precomputed:
+        if item is None:
+            continue
+        X, y, X_rank, actual_balls = item
+        Xs  = X[:, feat_indices]
+        Xrs = X_rank[:, feat_indices]
+
+        scaler = StandardScaler()
+        Xs_fit  = scaler.fit_transform(Xs)
+        Xrs_fit = scaler.transform(Xrs)
+
+        clf = GradientBoostingClassifier(
+            n_estimators=100, max_depth=2, learning_rate=0.15,
+            subsample=0.8, min_samples_leaf=10, random_state=seed,
+        )
+        clf.fit(Xs_fit, y)
+
+        scores = clf.predict_proba(Xrs_fit)[:, 1]
+        ball_sc = {b: float(scores[i * n_samp:(i + 1) * n_samp].mean())
+                   for i, b in enumerate(range(1, 51))}
+        ranked  = sorted(range(1, 51), key=lambda b: -ball_sc[b])
+        per_draw_top30.append(len(actual_balls & set(ranked[:30])))
+
+    return round(float(np.mean(per_draw_top30)), 3) if per_draw_top30 else 0.0
+
+
+def ablation_study(
+    df: pd.DataFrame,
+    last_n: int = 20,
+    seed:   int = 42,
+) -> None:
+    """
+    Étude d'ablation par groupe de features.
+    Pour chaque groupe G :
+      - Leave-one-out  : entraîne sans G,  mesure la dégradation (impact)
+      - Group-only     : entraîne avec G seul, mesure la prédictivité isolée
+    Affiche aussi les importances GBT par groupe sur un modèle unique final.
+    """
+    N_SAMP  = 50   # combos par boule pour le ranking (vitesse > précision)
+    N_NEG   = 5    # ratio négatifs/positifs (réduit pour rapidité)
+    S       = "=" * 72
+
+    print(f"\n{S}")
+    print("  ÉTUDE D'ABLATION  –  52 features  ·  14 groupes")
+    print(S)
+    print(f"\n  Pré-calcul des {last_n} datasets walk-forward (n_neg={N_NEG})…")
+
+    # ── 1. Pré-calcul des matrices (une fois par position) ───────────────
+    precomputed: list = []
+    for i in range(last_n):
+        t = len(df) - last_n + i
+        if t < 100:
+            precomputed.append(None)
+            continue
+
+        train_df     = df.iloc[:t].reset_index(drop=True)
+        test_row     = df.iloc[t]
+        actual_balls = {int(test_row[c]) for c in BALL_COLS if pd.notna(test_row[c])}
+        if len(actual_balls) != 5:
+            precomputed.append(None)
+            continue
+
+        stats    = DrawStats(train_df)
+        X, y     = build_dataset(train_df, stats, n_neg_ratio=N_NEG, seed=seed)
+
+        random.seed(seed)
+        rank_combos = []
+        for b in range(1, 51):
+            pool = [x for x in range(1, 51) if x != b]
+            for _ in range(N_SAMP):
+                others = random.sample(pool, 4)
+                balls  = sorted([b] + others)
+                stars  = sorted(random.sample(range(1, stats.max_star + 1), 2))
+                rank_combos.append((balls, stars))
+
+        X_rank = np.vstack([extract_features(b, s, stats) for b, s in rank_combos])
+        precomputed.append((X, y, X_rank, actual_balls))
+
+    # ── 2. Importances GBT sur un modèle unique (toutes les features) ────
+    print("  Entraînement modèle de référence pour importances GBT…")
+    ref_stats = DrawStats(df.iloc[:-last_n].reset_index(drop=True))
+    X_ref, y_ref = build_dataset(df.iloc[:-last_n].reset_index(drop=True),
+                                  ref_stats, n_neg_ratio=N_NEG, seed=seed)
+    ref_clf = GradientBoostingClassifier(
+        n_estimators=300, max_depth=3, learning_rate=0.08,
+        subsample=0.8, min_samples_leaf=5, random_state=seed,
+    )
+    sc_ref = StandardScaler()
+    ref_clf.fit(sc_ref.fit_transform(X_ref), y_ref)
+    gbt_imp: np.ndarray = ref_clf.feature_importances_
+
+    # ── 3. Baseline (toutes les features) ────────────────────────────────
+    all_idx = list(range(len(FEATURE_NAMES)))
+    print("  Baseline (toutes features)…")
+    baseline = _fast_ablation_eval(precomputed, all_idx, N_SAMP, seed)
+
+    # ── 4. Leave-one-out + group-only ────────────────────────────────────
+    n_groups = len(FEATURE_GROUPS)
+    results  = []
+
+    for gi, (group_name, feat_names) in enumerate(FEATURE_GROUPS.items(), 1):
+        feat_idx = [FEATURE_NAMES.index(f) for f in feat_names]
+        keep_idx = [i for i in all_idx if i not in feat_idx]
+        group_gbt_imp = float(gbt_imp[feat_idx].sum())
+
+        print(f"  [{gi:02d}/{n_groups}] {group_name:<16}  "
+              f"leave-one-out…", end="", flush=True)
+        without = _fast_ablation_eval(precomputed, keep_idx, N_SAMP, seed)
+
+        print("  group-only…", end="", flush=True)
+        only    = _fast_ablation_eval(precomputed, feat_idx,  N_SAMP, seed)
+        print()
+
+        results.append({
+            "group":      group_name,
+            "n_feat":     len(feat_names),
+            "gbt_imp":    group_gbt_imp,
+            "without":    without,
+            "impact":     round(baseline - without, 3),
+            "only":       only,
+            "only_delta": round(only - 3.0, 3),
+        })
+
+    # ── 5. Feature par feature (importances GBT triées) ──────────────────
+    fi_sorted = sorted(enumerate(FEATURE_NAMES),
+                       key=lambda x: -gbt_imp[x[0]])
+    group_of: dict[str, str] = {}
+    for gname, fnames in FEATURE_GROUPS.items():
+        for fn in fnames:
+            group_of[fn] = gname
+
+    print(f"\n{S}")
+    print("  FEATURE PAR FEATURE  –  importance GBT (modèle de référence)")
+    print(S)
+    print(f"\n  {'#':>3}  {'Feature':<26}  {'Groupe':<16}  {'GBT Imp.':>9}")
+    print(f"  {'-'*62}")
+    for rank_i, (fi, fname) in enumerate(fi_sorted, 1):
+        bar  = "█" * int(gbt_imp[fi] * 200)
+        grp  = group_of.get(fname, "?")
+        print(f"  {rank_i:>3}  {fname:<26}  {grp:<16}  {gbt_imp[fi]*100:>8.2f}%  {bar}")
+
+    # ── 6. Résultat ablation par groupe ──────────────────────────────────
+    results.sort(key=lambda r: -r["impact"])
+
+    print(f"\n{S}")
+    print(f"  ABLATION PAR GROUPE  ·  baseline Top30 = {baseline:.3f}"
+          f"  (Δ vs aléatoire : {baseline - 3.0:+.3f})")
+    print(S)
+    print(f"\n  {'Groupe':<16}  {'N':>3}  {'GBT%':>6}  "
+          f"{'Sans T30':>9}  {'Impact':>8}  "
+          f"{'Seul T30':>9}  {'Seul Δ':>8}")
+    print(f"  {'-'*72}")
+
+    for r in results:
+        imp_flag  = " ★" if r["impact"] > 0.05 else (" ▲" if r["impact"] > 0 else "")
+        only_flag = " ★" if r["only_delta"] > 0 else ""
+        print(
+            f"  {r['group']:<16}  {r['n_feat']:>3}  "
+            f"{r['gbt_imp']*100:>5.1f}%  "
+            f"  {r['without']:>7.3f}  {r['impact']:>+8.3f}{imp_flag}  "
+            f"  {r['only']:>7.3f}  {r['only_delta']:>+8.3f}{only_flag}"
+        )
+
+    print(f"\n  Légende :")
+    print(f"    Impact  = Baseline − Sans  (positif → ce groupe améliore le score)")
+    print(f"    Seul Δ  = performance isolée vs aléatoire (3.000 attendu)")
+    print(f"    GBT%    = part des importances GBT pour ce groupe")
+
+
+# ---------------------------------------------------------------------------
 # Validation de la combinaison
 # ---------------------------------------------------------------------------
 
@@ -799,7 +1039,8 @@ def main() -> None:
     n_neg_ratio = int(next(
         (args[i + 1] for i, a in enumerate(args) if a == "--n-neg"), "20"
     ))
-    no_plots = "--no-plots" in args
+    no_plots    = "--no-plots" in args
+    run_ablation = "--ablation" in args
 
     # ── Chargement ────────────────────────────────────────────────────────
     if not CACHE_CSV.exists():
@@ -898,6 +1139,10 @@ def main() -> None:
         print(f"\nGraphiques → {STATS_DIR}/")
         plot_backtest(bt, STATS_DIR)
         plot_feature_importance(model, STATS_DIR)
+
+    # ── Étude d'ablation ──────────────────────────────────────────────────
+    if run_ablation:
+        ablation_study(df, last_n=min(last_n, 20))
 
     # ── Score d'une sélection ─────────────────────────────────────────────
     if user_combo:
