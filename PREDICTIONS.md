@@ -2,7 +2,7 @@
 
 > Modèle entraîné sur l'ensemble des tirages historiques (FDJ)  
 > **44 features** · **200 000 combinaisons** évaluées  
-> _(généré automatiquement le 2026-05-30 12:45 UTC)_
+> _(généré automatiquement le 2026-05-30 13:06 UTC)_
 
 ---
 
