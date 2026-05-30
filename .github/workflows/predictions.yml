@@ -1,0 +1,129 @@
+name: EuroMillions – Prédictions automatiques
+
+# Dimanche et mercredi soir → prédictions pour mardi et vendredi (jours de tirage)
+on:
+  schedule:
+    - cron: '0 19 * * 0'   # Dimanche 19h UTC = 21h Paris (été)
+    - cron: '0 19 * * 3'   # Mercredi 19h UTC = 21h Paris (été)
+  workflow_dispatch:        # Déclenchement manuel depuis l'onglet Actions
+
+permissions:
+  contents: write
+
+jobs:
+  predict:
+    name: Générer les prédictions
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Python ────────────────────────────────────────────────────────
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances
+        run: pip install -r requirements.txt
+
+      # ── 3. Données fraîches ───────────────────────────────────────────────
+      - name: Télécharger les derniers résultats FDJ
+        run: python euromillions_scraper.py
+
+      # ── 4. Entraînement + recommandations ─────────────────────────────────
+      - name: Entraîner le modèle et générer 200 000 combinaisons
+        run: |
+          python scoring_model.py \
+            --select-features \
+            --last-n 20 \
+            --no-plots \
+            --recommend 200000
+
+      # ── 5. Rapport Markdown lisible ───────────────────────────────────────
+      - name: Générer PREDICTIONS.md
+        run: |
+          python - <<'PYEOF'
+          import json
+          from datetime import date, datetime
+
+          with open("stats/recommendations.json", encoding="utf-8") as f:
+              recs = json.load(f)
+
+          today = date.today().strftime("%d/%m/%Y")
+          now   = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+          top   = recs[0]
+
+          lines = [
+              f"# EuroMillions – Prédictions du {today}",
+              "",
+              f"> Modèle entraîné sur l'ensemble des tirages historiques (FDJ)  ",
+              f"> **44 features** · **200 000 combinaisons** évaluées  ",
+              f"> _(généré automatiquement le {now})_",
+              "",
+              "---",
+              "",
+              "## Sélection #1 recommandée",
+              "",
+              f"| | Numéros |",
+              f"|---|---|",
+              f"| **Boules** | {' – '.join(map(str, top['balls']))} |",
+              f"| **Étoiles** | {' – '.join(map(str, top['stars']))} |",
+              f"| **Score modèle** | {top['score']:.1f}% (top {100 - top['percentile']:.1f}‰ des combinaisons) |",
+              "",
+              "---",
+              "",
+              "## Top 20 combinaisons",
+              "",
+              "| Rang | Boules | Étoiles | Score |",
+              "|:----:|--------|:-------:|:-----:|",
+          ]
+
+          for r in recs:
+              balls = "  ".join(map(str, r["balls"]))
+              stars = "  ".join(map(str, r["stars"]))
+              lines.append(f"| {r['rank']:>2} | {balls} | {stars} | {r['score']:.1f}% |")
+
+          lines += [
+              "",
+              "---",
+              "",
+              "_Ce score mesure la **typicité statistique** d'une combinaison par rapport_",
+              "_aux 1 950+ tirages historiques. Il ne prédit pas le tirage : l'EuroMillions_",
+              "_reste un jeu de hasard. Jouez de façon responsable._",
+          ]
+
+          with open("PREDICTIONS.md", "w", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+
+          print(f"PREDICTIONS.md généré – Top: {top['balls']} etoiles {top['stars']}")
+          PYEOF
+
+      # ── 6. Commit & push ──────────────────────────────────────────────────
+      - name: Commit et push les prédictions
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add PREDICTIONS.md stats/recommendations.json stats/backtest.json
+          git add data/euromillions_results.csv 2>/dev/null || true
+
+          # Ne committe que s'il y a des changements
+          if git diff --staged --quiet; then
+            echo "Aucun changement à committer."
+            exit 0
+          fi
+
+          TOP=$(python - <<'EOF'
+          import json
+          r = json.load(open("stats/recommendations.json"))[0]
+          print(" ".join(map(str, r["balls"])) + " * " + " ".join(map(str, r["stars"])))
+          EOF
+          )
+          git commit -m "predictions: $(date '+%Y-%m-%d') | Top: ${TOP}"
+          git push
