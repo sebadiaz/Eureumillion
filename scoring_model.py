@@ -47,7 +47,7 @@ from euromillions_scraper import (
 BALL_COLS = ["ball_1", "ball_2", "ball_3", "ball_4", "ball_5"]
 STAR_COLS = ["star_1", "star_2"]
 
-# Noms des 29 features (même ordre que extract_features)
+# Noms des 36 features (même ordre que extract_features)
 FEATURE_NAMES: list[str] = [
     # Fréquence historique des boules (fraction de tirages où la boule est sortie)
     "ball_freq_mean", "ball_freq_min", "ball_freq_max", "ball_freq_std",
@@ -67,9 +67,15 @@ FEATURE_NAMES: list[str] = [
     "n_consec_pairs",
     # Étoiles
     "sum_stars", "star_gap", "n_stars_low_half",
+    # Fréquence récente (30 et 100 derniers tirages)
+    "ball_hot30_mean", "ball_hot30_n", "ball_hot100_mean",
+    # Co-occurrence historique des paires de boules
+    "pair_cooc_mean", "pair_cooc_max",
+    # Rang de fréquence globale (1/50 = plus fréquent, 50/50 = moins fréquent)
+    "ball_rank_mean", "ball_rank_std",
 ]
 
-assert len(FEATURE_NAMES) == 29
+assert len(FEATURE_NAMES) == 36
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +126,7 @@ class DrawStats:
             )
             self.star_freq_ratio[s] = sc.get(s, 0) / expected if expected > 0 else 0.0
 
-        # ── Recency (tirages depuis la dernière apparition) ───────────────
+        # ── Recency + matrices indicatrices ──────────────────────────────
         # Matrice indicatrice (n × 50) pour les boules
         ball_mat = np.zeros((n, 50), dtype=bool)
         for i, row in df[BALL_COLS].iterrows():
@@ -145,6 +151,27 @@ class DrawStats:
             idxs = np.where(star_mat[:, s - 1])[0]
             self.star_recency[s] = int(n - 1 - idxs[-1]) if len(idxs) else n
 
+        # ── Co-occurrence des paires de boules ───────────────────────────
+        bm = ball_mat.astype(np.float32)
+        self.pair_cooc: np.ndarray = (bm.T @ bm) / n   # 50×50 : frac. tirages en commun
+        np.fill_diagonal(self.pair_cooc, 0.0)
+
+        # ── Fréquence récente (30 et 100 derniers tirages) ───────────────
+        w30  = min(30, n)
+        w100 = min(100, n)
+        b30  = pd.concat([df.iloc[-w30:][c]  for c in BALL_COLS]).dropna().astype(int)
+        b100 = pd.concat([df.iloc[-w100:][c] for c in BALL_COLS]).dropna().astype(int)
+        bc30  = Counter(b30.tolist())
+        bc100 = Counter(b100.tolist())
+        self.ball_freq_30:  dict[int, float] = {b: bc30.get(b,  0) / w30  for b in range(1, 51)}
+        self.ball_freq_100: dict[int, float] = {b: bc100.get(b, 0) / w100 for b in range(1, 51)}
+
+        # ── Rang de fréquence globale (normalisé 0–1, plus petit = plus fréquent) ──
+        sorted_b = sorted(range(1, 51), key=lambda b: -self.ball_freq[b])
+        self.ball_rank: dict[int, float] = {
+            b: (sorted_b.index(b) + 1) / 50.0 for b in range(1, 51)
+        }
+
         # ── Distribution de référence (mean/std des features sur les vrais tirages)
         # Calculée après le premier build_dataset dans ScoringModel.fit()
         self.ref_mean: np.ndarray | None = None
@@ -160,7 +187,7 @@ def extract_features(
     stars: list[int],
     stats: DrawStats,
 ) -> np.ndarray:
-    """Retourne un vecteur de 29 features pour une combinaison donnée."""
+    """Retourne un vecteur de 36 features pour une combinaison donnée."""
     balls = sorted(balls)
     stars = sorted(stars)
 
@@ -202,6 +229,26 @@ def extract_features(
     star_gap = float(stars[1] - stars[0]) if len(stars) == 2 else 0.0
     n_s_low = float(sum(1 for s in stars if s <= stats.max_star // 2))
 
+    # ── Fréquence récente (30 et 100 derniers tirages) ───────────────────
+    bf30  = np.array([stats.ball_freq_30.get(b, 0.0)  for b in balls])
+    bf100 = np.array([stats.ball_freq_100.get(b, 0.0) for b in balls])
+    hot30_mean  = float(bf30.mean())
+    hot30_n     = float((bf30 > 0.0).sum())   # boules sorties dans les 30 derniers
+    hot100_mean = float(bf100.mean())
+
+    # ── Co-occurrence historique des paires ──────────────────────────────
+    cooc_vals = np.array([
+        stats.pair_cooc[balls[i] - 1, balls[j] - 1]
+        for i in range(5) for j in range(i + 1, 5)
+    ])
+    cooc_mean = float(cooc_vals.mean())
+    cooc_max  = float(cooc_vals.max())
+
+    # ── Rang de fréquence globale ─────────────────────────────────────────
+    ranks     = np.array([stats.ball_rank.get(b, 0.5) for b in balls])
+    rank_mean = float(ranks.mean())
+    rank_std  = float(ranks.std())
+
     return np.array([
         bf_mean, bf_min, bf_max, bf_std,
         br_mean, br_max, br_std,
@@ -211,6 +258,9 @@ def extract_features(
         *dc, dec_ent,
         g_mean, g_std, g_min, g_max, n_consec,
         sum_s, star_gap, n_s_low,
+        hot30_mean, hot30_n, hot100_mean,
+        cooc_mean, cooc_max,
+        rank_mean, rank_std,
     ], dtype=float)
 
 
@@ -269,11 +319,11 @@ class ScoringModel:
         self.stats:  DrawStats | None = None
         self.scaler  = StandardScaler()
         self.clf     = GradientBoostingClassifier(
-            n_estimators=300,
-            max_depth=3,
-            learning_rate=0.05,
+            n_estimators=600,
+            max_depth=4,
+            learning_rate=0.03,
             subsample=0.8,
-            min_samples_leaf=10,
+            min_samples_leaf=5,
             random_state=seed,
         )
         # Baseline linéaire pour comparaison
@@ -356,7 +406,7 @@ class ScoringModel:
 
     def rank_numbers(
         self,
-        n_samples: int = 300,
+        n_samples: int = 500,
         seed: int = 0,
     ) -> tuple[list[int], list[int], dict, dict]:
         """
@@ -407,7 +457,7 @@ class ScoringModel:
     def backtest(
         self,
         test_df: pd.DataFrame,
-        n_samples_ranking: int = 300,
+        n_samples_ranking: int = 500,
         seed: int = 99,
     ) -> dict:
         """
