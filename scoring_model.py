@@ -11,10 +11,11 @@ aux combinaisons historiquement sorties.
    d'une combinaison, il ne prédit pas le prochain tirage.
 
 Usage :
-  python scoring_model.py                                # entraîne + backtest (100 derniers tirages)
-  python scoring_model.py --last-n 200                   # tester sur les 200 derniers tirages
-  python scoring_model.py --score 5 14 23 42 49 2 8      # score 5 boules + 2 étoiles
-  python scoring_model.py --n-neg 20                     # ratio négatifs/positifs
+  python scoring_model.py                                # backtest (50 derniers tirages) + modèle final
+  python scoring_model.py --last-n 100                   # backtest sur 100 derniers tirages
+  python scoring_model.py --recommend 100000             # top 20 sur 100 000 tirages aléatoires
+  python scoring_model.py --score 5 14 23 42 49 2 8      # score une sélection
+  python scoring_model.py --n-neg 20                     # ratio négatifs/positifs (défaut 20)
   python scoring_model.py --no-plots                     # sans graphiques
 """
 
@@ -47,35 +48,42 @@ from euromillions_scraper import (
 BALL_COLS = ["ball_1", "ball_2", "ball_3", "ball_4", "ball_5"]
 STAR_COLS = ["star_1", "star_2"]
 
-# Noms des 36 features (même ordre que extract_features)
+# Noms des 39 features (même ordre que extract_features)
 FEATURE_NAMES: list[str] = [
-    # Fréquence historique des boules (fraction de tirages où la boule est sortie)
+    # Fréquence historique des boules
     "ball_freq_mean", "ball_freq_min", "ball_freq_max", "ball_freq_std",
+    # Log-produit des fréquences (capture mieux les boules rares)
+    "ball_freq_log_sum",
     # Recency : nb de tirages depuis la dernière apparition de chaque boule
     "ball_rec_mean", "ball_rec_max", "ball_rec_std",
     # Fréquence des étoiles (ratio obs/espérance corrigée par période)
     "star_freq_mean", "star_freq_min",
     # Recency étoiles
     "star_rec_mean", "star_rec_max",
-    # Structure de la combinaison
-    "sum_balls", "range_balls", "n_odd_balls", "n_low_balls",
-    # Distribution par dizaine (1-10, 11-20, …, 41-50)
+    # Structure
+    "sum_balls", "sum_zscore",        # somme et son z-score vs distribution théorique
+    "range_balls", "n_odd_balls", "n_low_balls",
+    # Distribution par dizaine
     "n_dec_01_10", "n_dec_11_20", "n_dec_21_30", "n_dec_31_40", "n_dec_41_50",
     "decade_entropy",
-    # Écarts entre boules consécutives (une fois triées)
+    # Écarts entre boules consécutives
     "consec_gap_mean", "consec_gap_std", "consec_gap_min", "consec_gap_max",
     "n_consec_pairs",
     # Étoiles
     "sum_stars", "star_gap", "n_stars_low_half",
-    # Fréquence récente (30 et 100 derniers tirages)
-    "ball_hot30_mean", "ball_hot30_n", "ball_hot100_mean",
-    # Co-occurrence historique des paires de boules
-    "pair_cooc_mean", "pair_cooc_max",
-    # Rang de fréquence globale (1/50 = plus fréquent, 50/50 = moins fréquent)
-    "ball_rank_mean", "ball_rank_std",
+    # Fréquence récente (50 derniers tirages)
+    "ball_hot50_mean", "ball_hot50_n",
+    # Co-occurrence historique des paires (mean + log-somme)
+    "pair_cooc_mean", "pair_cooc_max", "pair_cooc_log_sum",
+    # Rang de fréquence globale
+    "ball_rank_mean",
+    # Co-occurrence étoiles
+    "star_cooc",
+    # Décalage fréquence récente vs historique
+    "ball_freq_momentum",
 ]
 
-assert len(FEATURE_NAMES) == 36
+assert len(FEATURE_NAMES) == 39
 
 
 # ---------------------------------------------------------------------------
@@ -156,21 +164,28 @@ class DrawStats:
         self.pair_cooc: np.ndarray = (bm.T @ bm) / n   # 50×50 : frac. tirages en commun
         np.fill_diagonal(self.pair_cooc, 0.0)
 
-        # ── Fréquence récente (30 et 100 derniers tirages) ───────────────
-        w30  = min(30, n)
-        w100 = min(100, n)
-        b30  = pd.concat([df.iloc[-w30:][c]  for c in BALL_COLS]).dropna().astype(int)
-        b100 = pd.concat([df.iloc[-w100:][c] for c in BALL_COLS]).dropna().astype(int)
-        bc30  = Counter(b30.tolist())
-        bc100 = Counter(b100.tolist())
-        self.ball_freq_30:  dict[int, float] = {b: bc30.get(b,  0) / w30  for b in range(1, 51)}
-        self.ball_freq_100: dict[int, float] = {b: bc100.get(b, 0) / w100 for b in range(1, 51)}
+        # ── Co-occurrence des paires d'étoiles ───────────────────────────
+        sm = star_mat.astype(np.float32)
+        star_cooc_mat = (sm.T @ sm) / n   # 12×12
+        np.fill_diagonal(star_cooc_mat, 0.0)
+        self.star_cooc_mat: np.ndarray = star_cooc_mat
+
+        # ── Fréquence récente (50 derniers tirages) ──────────────────────
+        w50 = min(50, n)
+        b50 = pd.concat([df.iloc[-w50:][c] for c in BALL_COLS]).dropna().astype(int)
+        bc50 = Counter(b50.tolist())
+        self.ball_freq_50: dict[int, float] = {b: bc50.get(b, 0) / w50 for b in range(1, 51)}
 
         # ── Rang de fréquence globale (normalisé 0–1, plus petit = plus fréquent) ──
         sorted_b = sorted(range(1, 51), key=lambda b: -self.ball_freq[b])
         self.ball_rank: dict[int, float] = {
             b: (sorted_b.index(b) + 1) / 50.0 for b in range(1, 51)
         }
+
+        # ── Distribution théorique de la somme (loi hypergéométrique approx.) ──
+        # E[sum] = 5 × 51/2 = 127.5,  Var[sum] = 5 × (50²-1)/12 × (50-5)/(50-1) ≈ 218.75
+        self.sum_mean = 127.5
+        self.sum_std  = float(np.sqrt(218.75))
 
         # ── Distribution de référence (mean/std des features sur les vrais tirages)
         # Calculée après le premier build_dataset dans ScoringModel.fit()
@@ -229,38 +244,52 @@ def extract_features(
     star_gap = float(stars[1] - stars[0]) if len(stars) == 2 else 0.0
     n_s_low = float(sum(1 for s in stars if s <= stats.max_star // 2))
 
-    # ── Fréquence récente (30 et 100 derniers tirages) ───────────────────
-    bf30  = np.array([stats.ball_freq_30.get(b, 0.0)  for b in balls])
-    bf100 = np.array([stats.ball_freq_100.get(b, 0.0) for b in balls])
-    hot30_mean  = float(bf30.mean())
-    hot30_n     = float((bf30 > 0.0).sum())   # boules sorties dans les 30 derniers
-    hot100_mean = float(bf100.mean())
+    # ── Log-produit des fréquences ───────────────────────────────────────
+    freq_log_sum = float(np.sum(np.log(bf + 1e-9)))
 
-    # ── Co-occurrence historique des paires ──────────────────────────────
+    # ── Z-score de la somme vs distribution théorique ────────────────────
+    sum_zscore = float((sum_b - stats.sum_mean) / stats.sum_std)
+
+    # ── Fréquence récente (50 derniers tirages) ───────────────────────────
+    bf50  = np.array([stats.ball_freq_50.get(b, 0.0) for b in balls])
+    hot50_mean = float(bf50.mean())
+    hot50_n    = float((bf50 > 0.0).sum())
+
+    # ── Momentum : fréquence récente vs historique ────────────────────────
+    ball_freq_momentum = float(hot50_mean - bf_mean)
+
+    # ── Co-occurrence historique des paires de boules ────────────────────
     cooc_vals = np.array([
         stats.pair_cooc[balls[i] - 1, balls[j] - 1]
         for i in range(5) for j in range(i + 1, 5)
     ])
-    cooc_mean = float(cooc_vals.mean())
-    cooc_max  = float(cooc_vals.max())
+    cooc_mean    = float(cooc_vals.mean())
+    cooc_max     = float(cooc_vals.max())
+    cooc_log_sum = float(np.sum(np.log(cooc_vals + 1e-6)))
+
+    # ── Co-occurrence des étoiles ─────────────────────────────────────────
+    star_cooc_val = float(stats.star_cooc_mat[stars[0] - 1, stars[1] - 1]) if len(stars) == 2 else 0.0
 
     # ── Rang de fréquence globale ─────────────────────────────────────────
     ranks     = np.array([stats.ball_rank.get(b, 0.5) for b in balls])
     rank_mean = float(ranks.mean())
-    rank_std  = float(ranks.std())
 
     return np.array([
         bf_mean, bf_min, bf_max, bf_std,
+        freq_log_sum,
         br_mean, br_max, br_std,
         sf_mean, sf_min,
         sr_mean, sr_max,
-        sum_b, range_b, n_odd, n_low,
+        sum_b, sum_zscore,
+        range_b, n_odd, n_low,
         *dc, dec_ent,
         g_mean, g_std, g_min, g_max, n_consec,
         sum_s, star_gap, n_s_low,
-        hot30_mean, hot30_n, hot100_mean,
-        cooc_mean, cooc_max,
-        rank_mean, rank_std,
+        hot50_mean, hot50_n,
+        cooc_mean, cooc_max, cooc_log_sum,
+        rank_mean,
+        star_cooc_val,
+        ball_freq_momentum,
     ], dtype=float)
 
 
@@ -746,7 +775,10 @@ def main() -> None:
         user_combo = (sorted(nums[:5]), sorted(nums[5:]))
 
     last_n = int(next(
-        (args[i + 1] for i, a in enumerate(args) if a == "--last-n"), "20"
+        (args[i + 1] for i, a in enumerate(args) if a == "--last-n"), "50"
+    ))
+    n_recommend = int(next(
+        (args[i + 1] for i, a in enumerate(args) if a == "--recommend"), "0"
     ))
     n_neg_ratio = int(next(
         (args[i + 1] for i, a in enumerate(args) if a == "--n-neg"), "20"
@@ -899,6 +931,48 @@ def main() -> None:
             json.dumps(exp, indent=2, ensure_ascii=False)
         )
         print(f"\n  Résultat complet → {STATS_DIR}/last_score.json")
+
+    # ── Mode recommandation : tirage aléatoire + top scores ───────────────
+    if n_recommend > 0:
+        print(f"\n{S}")
+        print(f"  RECOMMANDATIONS  –  top 20 / {n_recommend:,} tirages aléatoires")
+        print(S)
+        print(f"\n  Génération de {n_recommend:,} combinaisons…")
+
+        random.seed(0)
+        combos = [random_combination(model.stats.max_star) for _ in range(n_recommend)]
+        scores = model.score_batch(combos)
+
+        # Scores de référence pour percentile
+        ref_scores = scores  # on se compare à la distribution générée
+
+        top_idx = np.argsort(scores)[::-1][:20]
+
+        print(f"\n  {'Rang':>5}  {'Boules':>18}  {'Étoiles':>8}  {'Score':>7}  {'Pct':>7}")
+        print(f"  {'-'*55}")
+        for rank, i in enumerate(top_idx, 1):
+            b, s   = combos[i]
+            sc     = scores[i]
+            pct    = float(np.mean(ref_scores <= sc)) * 100
+            b_str  = " ".join(f"{x:2d}" for x in sorted(b))
+            s_str  = " ".join(f"{x:2d}" for x in sorted(s))
+            print(f"  {rank:>5}  {b_str}  {s_str}  {sc*100:>6.1f}%  {pct:>6.1f}%")
+
+        # Sauvegarde
+        reco = [
+            {
+                "rank": i + 1,
+                "balls": sorted(combos[top_idx[i]][0]),
+                "stars": sorted(combos[top_idx[i]][1]),
+                "score": round(float(scores[top_idx[i]]) * 100, 2),
+                "percentile": round(float(np.mean(ref_scores <= scores[top_idx[i]])) * 100, 1),
+            }
+            for i in range(len(top_idx))
+        ]
+        (STATS_DIR / "recommendations.json").write_text(
+            json.dumps(reco, indent=2, ensure_ascii=False)
+        )
+        print(f"\n  → {STATS_DIR}/recommendations.json")
 
 
 if __name__ == "__main__":
