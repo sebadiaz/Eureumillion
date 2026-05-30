@@ -1166,11 +1166,11 @@ def main() -> None:
 
     # ── Modèle final (entraîné sur tous les tirages sauf le dernier) ──────
     print(f"\n{S}")
-    print("  MODÈLE FINAL  (entraîné sur tous les tirages sauf le dernier)")
+    print("  MODÈLE FINAL  (entraîné sur la totalité des tirages)")
     print(S)
     print("\nEntraînement…")
     model = ScoringModel(n_neg_ratio=n_neg_ratio, feature_mask=active_mask)
-    model.fit(df.iloc[:-1].reset_index(drop=True))
+    model.fit(df.reset_index(drop=True))
 
     fi_sorted = sorted(zip(model._active_names(), model.importances), key=lambda x: -x[1])
     print("\n  Top 10 features :")
