@@ -1,8 +1,8 @@
-# EuroMillions – Prédictions du 30/05/2026
+# EuroMillions – Prédictions du 31/05/2026
 
 > Modèle entraîné sur l'ensemble des tirages historiques (FDJ)  
 > **44 features** · **200 000 combinaisons** évaluées  
-> _(généré automatiquement le 2026-05-30 13:44 UTC)_
+> _(généré automatiquement le 2026-05-31 20:29 UTC)_
 
 ---
 
