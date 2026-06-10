@@ -3,11 +3,11 @@
   "by_threshold": {
     "balls_top5": {
       "k": 5,
-      "mean_found": 0.35,
+      "mean_found": 0.4,
       "expected_random": 0.5,
       "dist": {
-        "0": 13,
-        "1": 7,
+        "0": 12,
+        "1": 8,
         "2": 0,
         "3": 0,
         "4": 0,
@@ -83,18 +83,18 @@
     },
     "balls_top30": {
       "k": 30,
-      "mean_found": 2.5,
+      "mean_found": 2.55,
       "expected_random": 3.0,
       "dist": {
         "0": 0,
         "1": 3,
-        "2": 9,
-        "3": 3,
+        "2": 8,
+        "3": 4,
         "4": 5,
         "5": 0
       },
       "pct_ge2": 85.0,
-      "pct_ge3": 40.0,
+      "pct_ge3": 45.0,
       "pct_ge4": 25.0
     },
     "stars_top2": {
