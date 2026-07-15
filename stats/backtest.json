@@ -19,83 +19,83 @@
     },
     "balls_top10": {
       "k": 10,
-      "mean_found": 0.9,
+      "mean_found": 1.0,
       "expected_random": 1.0,
       "dist": {
         "0": 7,
-        "1": 8,
+        "1": 7,
         "2": 5,
-        "3": 0,
+        "3": 1,
         "4": 0,
         "5": 0
       },
-      "pct_ge2": 25.0,
-      "pct_ge3": 0.0,
+      "pct_ge2": 30.0,
+      "pct_ge3": 5.0,
       "pct_ge4": 0.0
     },
     "balls_top15": {
       "k": 15,
-      "mean_found": 1.5,
+      "mean_found": 1.65,
       "expected_random": 1.5,
       "dist": {
         "0": 3,
-        "1": 9,
+        "1": 8,
         "2": 4,
-        "3": 3,
-        "4": 1,
-        "5": 0
-      },
-      "pct_ge2": 40.0,
-      "pct_ge3": 20.0,
-      "pct_ge4": 5.0
-    },
-    "balls_top20": {
-      "k": 20,
-      "mean_found": 1.8,
-      "expected_random": 2.0,
-      "dist": {
-        "0": 1,
-        "1": 9,
-        "2": 5,
         "3": 3,
         "4": 2,
         "5": 0
       },
-      "pct_ge2": 50.0,
+      "pct_ge2": 45.0,
       "pct_ge3": 25.0,
       "pct_ge4": 10.0
     },
+    "balls_top20": {
+      "k": 20,
+      "mean_found": 1.95,
+      "expected_random": 2.0,
+      "dist": {
+        "0": 1,
+        "1": 8,
+        "2": 5,
+        "3": 3,
+        "4": 3,
+        "5": 0
+      },
+      "pct_ge2": 55.0,
+      "pct_ge3": 30.0,
+      "pct_ge4": 15.0
+    },
     "balls_top25": {
       "k": 25,
-      "mean_found": 2.3,
+      "mean_found": 2.4,
       "expected_random": 2.5,
       "dist": {
         "0": 1,
         "1": 3,
-        "2": 9,
+        "2": 8,
         "3": 3,
-        "4": 4,
+        "4": 5,
         "5": 0
       },
       "pct_ge2": 80.0,
-      "pct_ge3": 35.0,
-      "pct_ge4": 20.0
+      "pct_ge3": 40.0,
+      "pct_ge4": 25.0
     },
     "balls_top30": {
       "k": 30,
-      "mean_found": 2.65,
+      "mean_found": 2.75,
       "expected_random": 3.0,
       "dist": {
         "0": 0,
         "1": 2,
-        "2": 7,
+        "2": 6,
         "3": 7,
-        "4": 4,
+        "4": 5,
         "5": 0
       },
       "pct_ge2": 90.0,
-      "pct_ge3": 55.0,
-      "pct_ge4": 20.0
+      "pct_ge3": 60.0,
+      "pct_ge4": 25.0
     },
     "stars_top2": {
       "k": 2,
@@ -109,31 +109,31 @@
     },
     "stars_top3": {
       "k": 3,
-      "mean_found": 0.65,
+      "mean_found": 0.6,
       "expected_random": 0.5,
       "dist": {
-        "0": 7,
-        "1": 13,
+        "0": 8,
+        "1": 12,
         "2": 0
       }
     },
     "stars_top4": {
       "k": 4,
-      "mean_found": 0.8,
+      "mean_found": 0.75,
       "expected_random": 0.667,
       "dist": {
-        "0": 5,
-        "1": 14,
+        "0": 6,
+        "1": 13,
         "2": 1
       }
     },
     "stars_top5": {
       "k": 5,
-      "mean_found": 1.1,
+      "mean_found": 1.05,
       "expected_random": 0.833,
       "dist": {
-        "0": 3,
-        "1": 12,
+        "0": 4,
+        "1": 11,
         "2": 5
       }
     },
