@@ -19,11 +19,11 @@
     },
     "balls_top10": {
       "k": 10,
-      "mean_found": 0.9,
+      "mean_found": 0.95,
       "expected_random": 1.0,
       "dist": {
-        "0": 8,
-        "1": 7,
+        "0": 7,
+        "1": 8,
         "2": 4,
         "3": 1,
         "4": 0,
@@ -35,66 +35,66 @@
     },
     "balls_top15": {
       "k": 15,
-      "mean_found": 1.4,
+      "mean_found": 1.45,
       "expected_random": 1.5,
       "dist": {
         "0": 4,
-        "1": 9,
-        "2": 3,
+        "1": 8,
+        "2": 4,
         "3": 3,
         "4": 1,
         "5": 0
       },
-      "pct_ge2": 35.0,
+      "pct_ge2": 40.0,
       "pct_ge3": 20.0,
       "pct_ge4": 5.0
     },
     "balls_top20": {
       "k": 20,
-      "mean_found": 1.8,
+      "mean_found": 1.85,
       "expected_random": 2.0,
       "dist": {
         "0": 0,
-        "1": 11,
-        "2": 4,
+        "1": 10,
+        "2": 5,
         "3": 3,
         "4": 2,
         "5": 0
       },
-      "pct_ge2": 45.0,
+      "pct_ge2": 50.0,
       "pct_ge3": 25.0,
       "pct_ge4": 10.0
     },
     "balls_top25": {
       "k": 25,
-      "mean_found": 2.25,
+      "mean_found": 2.3,
       "expected_random": 2.5,
       "dist": {
         "0": 0,
-        "1": 4,
-        "2": 10,
+        "1": 3,
+        "2": 11,
         "3": 3,
         "4": 3,
         "5": 0
       },
-      "pct_ge2": 80.0,
+      "pct_ge2": 85.0,
       "pct_ge3": 30.0,
       "pct_ge4": 15.0
     },
     "balls_top30": {
       "k": 30,
-      "mean_found": 2.65,
+      "mean_found": 2.7,
       "expected_random": 3.0,
       "dist": {
         "0": 0,
         "1": 2,
-        "2": 6,
-        "3": 9,
+        "2": 5,
+        "3": 10,
         "4": 3,
         "5": 0
       },
       "pct_ge2": 90.0,
-      "pct_ge3": 60.0,
+      "pct_ge3": 65.0,
       "pct_ge4": 15.0
     },
     "stars_top2": {
@@ -109,42 +109,42 @@
     },
     "stars_top3": {
       "k": 3,
-      "mean_found": 0.5,
+      "mean_found": 0.45,
       "expected_random": 0.5,
       "dist": {
-        "0": 10,
-        "1": 10,
+        "0": 11,
+        "1": 9,
         "2": 0
       }
     },
     "stars_top4": {
       "k": 4,
-      "mean_found": 0.7,
+      "mean_found": 0.6,
       "expected_random": 0.667,
       "dist": {
-        "0": 7,
+        "0": 8,
         "1": 12,
-        "2": 1
+        "2": 0
       }
     },
     "stars_top5": {
       "k": 5,
-      "mean_found": 1.0,
+      "mean_found": 0.9,
       "expected_random": 0.833,
       "dist": {
-        "0": 5,
+        "0": 6,
         "1": 10,
-        "2": 5
+        "2": 4
       }
     },
     "stars_top6": {
       "k": 6,
-      "mean_found": 1.1,
+      "mean_found": 1.0,
       "expected_random": 1.0,
       "dist": {
-        "0": 4,
+        "0": 5,
         "1": 10,
-        "2": 6
+        "2": 5
       }
     }
   }
