@@ -3,11 +3,11 @@
   "by_threshold": {
     "balls_top5": {
       "k": 5,
-      "mean_found": 0.3,
+      "mean_found": 0.25,
       "expected_random": 0.5,
       "dist": {
-        "0": 14,
-        "1": 6,
+        "0": 15,
+        "1": 5,
         "2": 0,
         "3": 0,
         "4": 0,
@@ -51,69 +51,69 @@
     },
     "balls_top20": {
       "k": 20,
-      "mean_found": 2.05,
+      "mean_found": 2.15,
       "expected_random": 2.0,
       "dist": {
         "0": 0,
-        "1": 9,
+        "1": 8,
         "2": 4,
-        "3": 4,
+        "3": 5,
         "4": 3,
         "5": 0
       },
-      "pct_ge2": 55.0,
-      "pct_ge3": 35.0,
+      "pct_ge2": 60.0,
+      "pct_ge3": 40.0,
       "pct_ge4": 15.0
     },
     "balls_top25": {
       "k": 25,
-      "mean_found": 2.5,
+      "mean_found": 2.65,
       "expected_random": 2.5,
       "dist": {
         "0": 0,
-        "1": 3,
+        "1": 2,
         "2": 7,
         "3": 7,
-        "4": 3,
+        "4": 4,
         "5": 0
       },
-      "pct_ge2": 85.0,
-      "pct_ge3": 50.0,
-      "pct_ge4": 15.0
+      "pct_ge2": 90.0,
+      "pct_ge3": 55.0,
+      "pct_ge4": 20.0
     },
     "balls_top30": {
       "k": 30,
-      "mean_found": 3.05,
+      "mean_found": 3.2,
       "expected_random": 3.0,
       "dist": {
         "0": 0,
-        "1": 2,
+        "1": 1,
         "2": 3,
         "3": 8,
-        "4": 6,
+        "4": 7,
         "5": 1
       },
-      "pct_ge2": 90.0,
-      "pct_ge3": 75.0,
-      "pct_ge4": 35.0
+      "pct_ge2": 95.0,
+      "pct_ge3": 80.0,
+      "pct_ge4": 40.0
     },
     "stars_top2": {
       "k": 2,
-      "mean_found": 0.3,
+      "mean_found": 0.25,
       "expected_random": 0.333,
       "dist": {
-        "0": 14,
-        "1": 6,
+        "0": 15,
+        "1": 5,
         "2": 0
       }
     },
     "stars_top3": {
       "k": 3,
-      "mean_found": 0.45,
+      "mean_found": 0.4,
       "expected_random": 0.5,
       "dist": {
-        "0": 11,
-        "1": 9,
+        "0": 12,
+        "1": 8,
         "2": 0
       }
     },
@@ -129,12 +129,12 @@
     },
     "stars_top5": {
       "k": 5,
-      "mean_found": 0.7,
+      "mean_found": 0.75,
       "expected_random": 0.833,
       "dist": {
         "0": 7,
-        "1": 12,
-        "2": 1
+        "1": 11,
+        "2": 2
       }
     },
     "stars_top6": {
