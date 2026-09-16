@@ -67,33 +67,33 @@
     },
     "balls_top25": {
       "k": 25,
-      "mean_found": 2.65,
+      "mean_found": 2.6,
       "expected_random": 2.5,
       "dist": {
         "0": 0,
-        "1": 2,
-        "2": 6,
+        "1": 3,
+        "2": 5,
         "3": 9,
         "4": 3,
         "5": 0
       },
-      "pct_ge2": 90.0,
+      "pct_ge2": 85.0,
       "pct_ge3": 60.0,
       "pct_ge4": 15.0
     },
     "balls_top30": {
       "k": 30,
-      "mean_found": 3.25,
+      "mean_found": 3.2,
       "expected_random": 3.0,
       "dist": {
         "0": 0,
-        "1": 1,
-        "2": 2,
+        "1": 2,
+        "2": 1,
         "3": 9,
         "4": 7,
         "5": 1
       },
-      "pct_ge2": 95.0,
+      "pct_ge2": 90.0,
       "pct_ge3": 85.0,
       "pct_ge4": 40.0
     },
@@ -109,11 +109,11 @@
     },
     "stars_top3": {
       "k": 3,
-      "mean_found": 0.35,
+      "mean_found": 0.3,
       "expected_random": 0.5,
       "dist": {
-        "0": 13,
-        "1": 7,
+        "0": 14,
+        "1": 6,
         "2": 0
       }
     },
