@@ -3,11 +3,11 @@
   "by_threshold": {
     "balls_top5": {
       "k": 5,
-      "mean_found": 0.4,
+      "mean_found": 0.45,
       "expected_random": 0.5,
       "dist": {
-        "0": 14,
-        "1": 4,
+        "0": 13,
+        "1": 5,
         "2": 2,
         "3": 0,
         "4": 0,
@@ -19,11 +19,11 @@
     },
     "balls_top10": {
       "k": 10,
-      "mean_found": 0.95,
+      "mean_found": 1.0,
       "expected_random": 1.0,
       "dist": {
-        "0": 4,
-        "1": 13,
+        "0": 3,
+        "1": 14,
         "2": 3,
         "3": 0,
         "4": 0,
@@ -35,75 +35,75 @@
     },
     "balls_top15": {
       "k": 15,
-      "mean_found": 1.5,
+      "mean_found": 1.6,
       "expected_random": 1.5,
       "dist": {
-        "0": 2,
+        "0": 1,
         "1": 9,
-        "2": 6,
+        "2": 7,
         "3": 3,
         "4": 0,
         "5": 0
       },
-      "pct_ge2": 45.0,
+      "pct_ge2": 50.0,
       "pct_ge3": 15.0,
       "pct_ge4": 0.0
     },
     "balls_top20": {
       "k": 20,
-      "mean_found": 2.25,
+      "mean_found": 2.4,
       "expected_random": 2.0,
       "dist": {
         "0": 0,
-        "1": 5,
+        "1": 4,
         "2": 7,
         "3": 6,
-        "4": 2,
+        "4": 3,
         "5": 0
       },
-      "pct_ge2": 75.0,
-      "pct_ge3": 40.0,
-      "pct_ge4": 10.0
+      "pct_ge2": 80.0,
+      "pct_ge3": 45.0,
+      "pct_ge4": 15.0
     },
     "balls_top25": {
       "k": 25,
-      "mean_found": 2.75,
+      "mean_found": 2.9,
       "expected_random": 2.5,
       "dist": {
         "0": 0,
-        "1": 2,
+        "1": 1,
         "2": 5,
         "3": 9,
-        "4": 4,
+        "4": 5,
         "5": 0
       },
-      "pct_ge2": 90.0,
-      "pct_ge3": 65.0,
-      "pct_ge4": 20.0
+      "pct_ge2": 95.0,
+      "pct_ge3": 70.0,
+      "pct_ge4": 25.0
     },
     "balls_top30": {
       "k": 30,
-      "mean_found": 3.45,
+      "mean_found": 3.5,
       "expected_random": 3.0,
       "dist": {
         "0": 0,
         "1": 1,
         "2": 1,
-        "3": 8,
-        "4": 8,
+        "3": 7,
+        "4": 9,
         "5": 2
       },
       "pct_ge2": 95.0,
       "pct_ge3": 90.0,
-      "pct_ge4": 50.0
+      "pct_ge4": 55.0
     },
     "stars_top2": {
       "k": 2,
-      "mean_found": 0.25,
+      "mean_found": 0.2,
       "expected_random": 0.333,
       "dist": {
-        "0": 16,
-        "1": 3,
+        "0": 17,
+        "1": 2,
         "2": 1
       }
     },
