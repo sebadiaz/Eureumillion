@@ -3,11 +3,11 @@
   "by_threshold": {
     "balls_top5": {
       "k": 5,
-      "mean_found": 0.45,
+      "mean_found": 0.5,
       "expected_random": 0.5,
       "dist": {
-        "0": 13,
-        "1": 5,
+        "0": 12,
+        "1": 6,
         "2": 2,
         "3": 0,
         "4": 0,
@@ -51,51 +51,51 @@
     },
     "balls_top20": {
       "k": 20,
-      "mean_found": 2.4,
+      "mean_found": 2.35,
       "expected_random": 2.0,
       "dist": {
         "0": 0,
         "1": 5,
-        "2": 5,
-        "3": 7,
+        "2": 6,
+        "3": 6,
         "4": 3,
         "5": 0
       },
       "pct_ge2": 75.0,
-      "pct_ge3": 50.0,
+      "pct_ge3": 45.0,
       "pct_ge4": 15.0
     },
     "balls_top25": {
       "k": 25,
-      "mean_found": 2.75,
+      "mean_found": 2.7,
       "expected_random": 2.5,
       "dist": {
         "0": 0,
         "1": 4,
-        "2": 3,
-        "3": 7,
+        "2": 4,
+        "3": 6,
         "4": 6,
         "5": 0
       },
       "pct_ge2": 80.0,
-      "pct_ge3": 65.0,
+      "pct_ge3": 60.0,
       "pct_ge4": 30.0
     },
     "balls_top30": {
       "k": 30,
-      "mean_found": 3.2,
+      "mean_found": 3.15,
       "expected_random": 3.0,
       "dist": {
         "0": 0,
         "1": 2,
         "2": 3,
-        "3": 5,
-        "4": 9,
+        "3": 6,
+        "4": 8,
         "5": 1
       },
       "pct_ge2": 90.0,
       "pct_ge3": 75.0,
-      "pct_ge4": 50.0
+      "pct_ge4": 45.0
     },
     "stars_top2": {
       "k": 2,
@@ -109,11 +109,11 @@
     },
     "stars_top3": {
       "k": 3,
-      "mean_found": 0.35,
+      "mean_found": 0.3,
       "expected_random": 0.5,
       "dist": {
-        "0": 14,
-        "1": 5,
+        "0": 15,
+        "1": 4,
         "2": 1
       }
     },
